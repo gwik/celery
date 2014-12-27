@@ -5,6 +5,6 @@ See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 
 package types
 
-type Transport interface {
+type Consumer interface {
 	Bind(queueName string) <-chan Message
 }

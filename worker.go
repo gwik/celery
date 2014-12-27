@@ -10,8 +10,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/gwik/celery/syncutil"
-	"github.com/gwik/celery/types"
+	"github.com/gwik/gocelery/syncutil"
+	"github.com/gwik/gocelery/types"
 
 	"code.google.com/p/go.net/context"
 )

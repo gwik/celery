@@ -9,7 +9,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/gwik/celery/types"
+	"github.com/gwik/gocelery/types"
+	_ "github.com/gwik/gocelery/message/json"
 
 	"code.google.com/p/go.net/context"
 	"github.com/streadway/amqp"
@@ -112,11 +113,8 @@ func Consume(queueName string) error {
 
 	go func() {
 		for d := range msgs {
-			if d.ContentType != "application/json" {
-				d.Ack(false)
-			}
 			log.Printf("%s", d.Body)
-			msg, err := types.DecodeJSONMessage(d.Body)
+			msg, err := types.DecodeMessage(d.ContentType, d.Body)
 			if err != nil {
 				log.Println(err)
 				continue

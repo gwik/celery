@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/gwik/celery"
+	"github.com/gwik/gocelery"
 )
 
 func main() {
