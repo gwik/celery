@@ -26,3 +26,4 @@ if __name__ == "__main__":
     add.delay(2, 3)
     two.delay(2)
     two.delay(None, key="foo")
+    two.apply_async(args=["LATER"], countdown=2)

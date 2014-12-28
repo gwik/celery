@@ -9,8 +9,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/gwik/gocelery/types"
 	_ "github.com/gwik/gocelery/message/json"
+	"github.com/gwik/gocelery/types"
 
 	"code.google.com/p/go.net/context"
 	"github.com/streadway/amqp"
@@ -26,56 +26,15 @@ func init() {
 	}
 }
 
-func two(ctx context.Context, msg types.Message) types.Result {
+func two(ctx context.Context, msg *types.Message) types.Result {
 	log.Printf("two: %v", msg)
 	return struct{}{}
 }
 
-func add(ctx context.Context, msg types.Message) types.Result {
+func add(ctx context.Context, msg *types.Message) types.Result {
 	log.Printf("add: %v", msg)
 	return struct{}{}
 }
-
-// func process(d amqp.Delivery) {
-// 	log.Printf("Content Type: %v", d.ContentType)
-// 	log.Printf("Routing Key: %v", d.RoutingKey)
-// 	log.Printf("Headers: %v", d.Headers)
-// 	log.Printf("Body: %s", d.Body)
-
-// 	msg, err := types.DecodeJSONMessage(d.Body)
-// 	if err != nil {
-// 		panic(err)
-// 	}
-
-// 	/*
-// 		Task() string
-// 		ID() string
-// 		Args() []interface{}
-// 		KwArgs() map[string]interface{}
-// 		Retries() int
-// 		ETA() time.Time
-// 		Expires() time.Time
-// 	*/
-
-// 	log.Printf("Message Task: %v", msg.Task())
-// 	log.Printf("Message ID: %v", msg.ID())
-// 	log.Printf("Message Args: %v", msg.Args())
-// 	log.Printf("Message KwArgs: %v", msg.KwArgs())
-// 	log.Printf("Message Retries: %v", msg.Retries())
-// 	log.Printf("Message ETA: %v", msg.ETA())
-// 	log.Printf("Message Expires: %v", msg.Expires())
-
-// 	var args [2]float64
-// 	for i, v := range msg.Args() {
-// 		args[i] = v.(float64)
-// 	}
-
-// 	if len(args) == 2 {
-// 		log.Printf("Add: %v => %0.2f", args, add(args[0], args[1]))
-// 	} else {
-// 		panic("invalid arguments")
-// 	}
-// }
 
 func Consume(queueName string) error {
 	ch, err := connection.Channel()
@@ -106,34 +65,39 @@ func Consume(queueName string) error {
 	worker := NewWorker(10)
 	worker.Register("tasks.add", add)
 	worker.Register("tasks.two", two)
-
 	worker.Start()
 
-	forever := make(chan bool)
+	scheduler := NewScheduler()
 
 	go func() {
-		for d := range msgs {
-			log.Printf("%s", d.Body)
-			msg, err := types.DecodeMessage(d.ContentType, d.Body)
-			if err != nil {
-				log.Println(err)
-				continue
-			}
+		scheduler.Start()
+		in := scheduler.Consume()
+		for msg := range in {
 			reply := make(chan types.Result, 1)
-			err = worker.Dispatch(msg, reply)
+			err := worker.Dispatch(msg, reply)
 			if err != nil {
 				log.Printf("Dispatch error: %v", err)
 				continue
 			}
-			go func(d amqp.Delivery, reply <-chan types.Result) {
+
+			go func(reply <-chan types.Result) {
 				<-reply
-				d.Ack(false)
-			}(d, reply)
+				// XXX: Ack
+			}(reply)
 		}
 	}()
 
 	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
-	<-forever
+	for d := range msgs {
+		log.Printf("%s", d.Body)
+		msg, err := types.DecodeMessage(d.ContentType, d.Body)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		scheduler.Add(msg)
+		d.Ack(false)
+	}
 
 	return nil
 }

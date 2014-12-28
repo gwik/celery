@@ -13,66 +13,52 @@ import (
 )
 
 type jsonMessage struct {
-	FTask    string                 `json:"task"`
-	FId      string                 `json:"id"`
-	FArgs    []interface{}          `json:"args"`
-	FKwargs  map[string]interface{} `json:"kwargs"`
-	FRetries int                    `json:"retries"`
-	FEta     string                 `json:"eta,omitempty"`
-	FExpires string                 `json:"expires,omitempty"`
-
-	// extensions
-}
-
-func (jm *jsonMessage) Task() string {
-	return jm.FTask
-}
-
-func (jm *jsonMessage) ID() string {
-	return jm.FId
-}
-
-func (jm *jsonMessage) Args() []interface{} {
-	return jm.FArgs
-}
-
-func (jm *jsonMessage) KwArgs() map[string]interface{} {
-	return jm.FKwargs
-}
-
-func (jm *jsonMessage) Retries() int {
-	return jm.FRetries
+	Task    string                 `json:"task"`
+	ID      string                 `json:"id"`
+	Args    []interface{}          `json:"args"`
+	Kwargs  map[string]interface{} `json:"kwargs"`
+	Retries int                    `json:"retries"`
+	Eta     string                 `json:"eta,omitempty"`
+	Expires string                 `json:"expires,omitempty"`
 }
 
 func (jm *jsonMessage) ETA() time.Time {
-	if jm.FEta == "" {
-		return time.Time{}
+	if jm.Eta == "" {
+		return time.Now()
 	}
-	t, err := time.Parse(time.RFC3339Nano, jm.FEta)
+	t, err := time.Parse(time.RFC3339Nano, jm.Eta)
 	if err != nil {
 		panic(err)
 	}
 	return t
 }
 
-func (jm *jsonMessage) Expires() time.Time {
-	if jm.FExpires == "" {
+func (jm *jsonMessage) ExpiresAt() time.Time {
+	if jm.Expires == "" {
 		return time.Time{}
 	}
-	t, err := time.Parse(time.RFC3339Nano, jm.FExpires)
+	t, err := time.Parse(time.RFC3339Nano, jm.Expires)
 	if err != nil {
 		panic(err)
 	}
 	return t
 }
 
-func decodeJSONMessage(p []byte) (types.Message, error) {
+func decodeJSONMessage(p []byte) (*types.Message, error) {
 	m := &jsonMessage{}
 	err := json.Unmarshal(p, m)
 	if err != nil {
 		return nil, err
 	}
-	return m, nil
+	return &types.Message{
+		Task:    m.Task,
+		ID:      m.ID,
+		Args:    m.Args,
+		KwArgs:  m.Kwargs,
+		Retries: m.Retries,
+		ETA:     m.ETA(),
+		Expires: m.ExpiresAt(),
+	}, nil
 }
 
 func init() {

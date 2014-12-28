@@ -17,7 +17,7 @@ import (
 )
 
 type job struct {
-	msg types.Message
+	msg *types.Message
 	ctx context.Context
 	h   types.HandleFunc
 	r   chan<- types.Result
@@ -58,12 +58,11 @@ func (w *Worker) Register(name string, h types.HandleFunc) {
 }
 
 // Dispatch run the job.
-func (w *Worker) Dispatch(msg types.Message, r chan<- types.Result) error {
-	task := msg.Task()
-	log.Printf("Dispatch %s", task)
-	h, exists := w.handlerReg[task]
+func (w *Worker) Dispatch(msg *types.Message, r chan<- types.Result) error {
+	log.Printf("Dispatch %s", msg.Task)
+	h, exists := w.handlerReg[msg.Task]
 	if !exists {
-		return fmt.Errorf("No handler for task: %s", task)
+		return fmt.Errorf("No handler for task: %s", msg.Task)
 	}
 	ctx := context.WithValue(w.ctx, dispatchedAt, time.Now())
 	w.ch <- &job{msg, ctx, h, r}

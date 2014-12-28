@@ -17,4 +17,4 @@ type Result interface {
 // 	err   error
 // }
 
-type HandleFunc func(context.Context, Message) Result
+type HandleFunc func(context.Context, *Message) Result

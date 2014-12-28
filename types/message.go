@@ -6,25 +6,25 @@ See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 package types
 
 import (
-	"time"
 	"fmt"
+	"time"
 )
 
-// Message interface as describe at http://celery.readthedocs.org/en/latest/internals/protocol.html
-type Message interface {
-	Task() string
-	ID() string
-	Args() []interface{}
-	KwArgs() map[string]interface{}
-	Retries() int
-	ETA() time.Time
-	Expires() time.Time
+// Message as describe at http://celery.readthedocs.org/en/latest/internals/protocol.html
+type Message struct {
+	Task    string
+	ID      string
+	Args    []interface{}
+	KwArgs  map[string]interface{}
+	Retries int
+	ETA     time.Time
+	Expires time.Time
 
 	// TODO: extensions
+
 }
 
-
-type DecoderFunc func([]byte)(Message, error)
+type DecoderFunc func([]byte) (*Message, error)
 
 var messageDecoderRegister map[string]DecoderFunc
 
@@ -32,7 +32,7 @@ func RegisterMessageDecoder(contentType string, decoder DecoderFunc) {
 	messageDecoderRegister[contentType] = decoder
 }
 
-func DecodeMessage(contentType string, p []byte) (Message, error) {
+func DecodeMessage(contentType string, p []byte) (*Message, error) {
 	dec, exists := messageDecoderRegister[contentType]
 	if !exists {
 		return nil, fmt.Errorf("No decoder registered for %s", contentType)
