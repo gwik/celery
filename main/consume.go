@@ -5,5 +5,5 @@ import (
 )
 
 func main() {
-	celery.Consume("celery")
+	gocelery.Consume("celery")
 }

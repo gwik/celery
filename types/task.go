@@ -9,12 +9,24 @@ import (
 	"code.google.com/p/go.net/context"
 )
 
-type Result interface {
+type Task struct {
+	Msg *Message
+	Ctx context.Context
 }
 
-// type Retry struct {
-// 	After int
-// 	err   error
-// }
+type Result struct {
+	Task *Task
+}
 
-type HandleFunc func(context.Context, *Message) Result
+func NewResult(task *Task) *Result {
+	return &Result{Task: task}
+}
+
+func NewTask(msg *Message) *Task {
+	return &Task{
+		Msg: msg,
+		Ctx: context.Background(),
+	}
+}
+
+type HandleFunc func(*Task) interface{}

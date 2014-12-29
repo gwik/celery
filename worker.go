@@ -3,33 +3,26 @@ Copyright (c) 2014 Antonin Amand <antonin.amand@gmail.com>, All rights reserved.
 See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 */
 
-package celery
+package gocelery
 
 import (
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/gwik/gocelery/syncutil"
 	"github.com/gwik/gocelery/types"
-
-	"code.google.com/p/go.net/context"
 )
 
 type job struct {
-	msg *types.Message
-	ctx context.Context
-	h   types.HandleFunc
-	r   chan<- types.Result
+	task    *types.Task
+	handler types.HandleFunc
 }
 
 type Worker struct {
 	handlerReg map[string]types.HandleFunc
 	ch         chan *job
-	resultChan chan types.Result
-	ctx        context.Context
-	cancelF    context.CancelFunc
 	gate       *syncutil.Gate
+	resultChan chan<- *types.Result
 }
 
 type key int
@@ -38,15 +31,12 @@ const (
 	dispatchedAt key = 0
 )
 
-func NewWorker(concurrency int) *Worker {
-	ctx, cancelF := context.WithCancel(context.Background())
+func NewWorker(concurrency int, resultChan chan<- *types.Result) *Worker {
 	return &Worker{
 		handlerReg: make(map[string]types.HandleFunc),
 		ch:         make(chan *job),
-		resultChan: make(chan types.Result),
-		ctx:        ctx,
-		cancelF:    cancelF,
 		gate:       syncutil.NewGate(concurrency),
+		resultChan: resultChan,
 	}
 }
 
@@ -58,14 +48,13 @@ func (w *Worker) Register(name string, h types.HandleFunc) {
 }
 
 // Dispatch run the job.
-func (w *Worker) Dispatch(msg *types.Message, r chan<- types.Result) error {
-	log.Printf("Dispatch %s", msg.Task)
-	h, exists := w.handlerReg[msg.Task]
+func (w *Worker) Dispatch(t *types.Task) error {
+	log.Printf("Dispatch %s", t.Msg.Task)
+	h, exists := w.handlerReg[t.Msg.Task]
 	if !exists {
-		return fmt.Errorf("No handler for task: %s", msg.Task)
+		return fmt.Errorf("No handler for task: %s", t.Msg.Task)
 	}
-	ctx := context.WithValue(w.ctx, dispatchedAt, time.Now())
-	w.ch <- &job{msg, ctx, h, r}
+	w.ch <- &job{t, h}
 	return nil
 }
 
@@ -74,7 +63,6 @@ func (w *Worker) Start() {
 }
 
 func (w *Worker) Stop() {
-	w.cancelF()
 }
 
 func (w *Worker) work() {
@@ -84,10 +72,11 @@ func (w *Worker) work() {
 			w.gate.Start()
 			go func() {
 				defer w.gate.Done()
-				job.r <- job.h(job.ctx, job.msg)
+				job.handler(job.task)
+				w.resultChan <- types.NewResult(job.task)
 			}()
-		case <-w.ctx.Done():
-			return
+			// case <-w.ctx.Done():
+			// 	return
 		}
 	}
 }

@@ -1,4 +1,4 @@
-package celery
+package gocelery
 
 import (
 	"container/heap"
@@ -8,31 +8,31 @@ import (
 	"github.com/gwik/gocelery/types"
 )
 
-type table []*types.Message
+type table []*types.Task
 
 func (t table) Len() int { return len(t) }
 
 func (t table) Less(i, j int) bool {
-	return t[i].ETA.Before(t[j].ETA)
+	return t[i].Msg.ETA.Before(t[j].Msg.ETA)
 }
 
 func (t table) Swap(i, j int) {
 	t[i], t[j] = t[j], t[i]
 }
 
-func (t *table) Push(msg interface{}) {
-	*t = append(*t, msg.(*types.Message))
+func (t *table) Push(task interface{}) {
+	*t = append(*t, task.(*types.Task))
 }
 
 func (t *table) Pop() interface{} {
 	old := *t
 	n := len(old)
-	msg := old[n-1]
+	task := old[n-1]
 	*t = old[0 : n-1]
-	return msg
+	return task
 }
 
-func (t table) Top() *types.Message {
+func (t table) Top() *types.Task {
 	if len(t) == 0 {
 		return nil
 	}
@@ -41,8 +41,8 @@ func (t table) Top() *types.Message {
 
 type Scheduler struct {
 	t       *table
-	inChan  chan *types.Message
-	outChan chan *types.Message
+	inChan  chan *types.Task
+	outChan chan *types.Task
 }
 
 func NewScheduler() *Scheduler {
@@ -51,13 +51,13 @@ func NewScheduler() *Scheduler {
 
 	return &Scheduler{
 		t:       &t,
-		inChan:  make(chan *types.Message),
-		outChan: make(chan *types.Message),
+		inChan:  make(chan *types.Task),
+		outChan: make(chan *types.Task),
 	}
 }
 
-func (s *Scheduler) Add(msg *types.Message) {
-	s.inChan <- msg
+func (s *Scheduler) Add(task *types.Task) {
+	s.inChan <- task
 }
 
 func (s *Scheduler) Start() {
@@ -67,23 +67,23 @@ func (s *Scheduler) Start() {
 			var timer <-chan time.Time
 			top := s.t.Top()
 			if top != nil {
-				delay := top.ETA.Sub(time.Now())
+				delay := top.Msg.ETA.Sub(time.Now())
 				timer = time.After(delay)
-				log.Printf("next pop in %v", delay)
+				log.Printf("next pop in %s", delay)
 			} else {
 				timer = never
 				log.Println("wait for tasks...")
 			}
 
 			select {
-			case msg, ok := <-s.inChan:
+			case task, ok := <-s.inChan:
 				if !ok {
 					close(s.outChan)
 					return
 				}
-				heap.Push(s.t, msg)
+				heap.Push(s.t, task)
 			case <-timer:
-				s.outChan <- heap.Pop(s.t).(*types.Message)
+				s.outChan <- heap.Pop(s.t).(*types.Task)
 			}
 		}
 	}()
@@ -93,6 +93,6 @@ func (s *Scheduler) Stop() {
 	close(s.inChan)
 }
 
-func (s *Scheduler) Consume() <-chan *types.Message {
+func (s *Scheduler) Consume() <-chan *types.Task {
 	return s.outChan
 }

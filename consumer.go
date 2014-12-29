@@ -3,16 +3,16 @@ Copyright (c) 2014 Antonin Amand <antonin.amand@gmail.com>, All rights reserved.
 See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 */
 
-package celery
+package gocelery
 
 import (
 	"log"
 	"os"
 
 	_ "github.com/gwik/gocelery/message/json"
+	amqptransport "github.com/gwik/gocelery/transport/amqp"
 	"github.com/gwik/gocelery/types"
 
-	"code.google.com/p/go.net/context"
 	"github.com/streadway/amqp"
 )
 
@@ -26,13 +26,13 @@ func init() {
 	}
 }
 
-func two(ctx context.Context, msg *types.Message) types.Result {
-	log.Printf("two: %v", msg)
+func two(task *types.Task) interface{} {
+	log.Printf("two: %v", task.Msg.ID)
 	return struct{}{}
 }
 
-func add(ctx context.Context, msg *types.Message) types.Result {
-	log.Printf("add: %v", msg)
+func add(task *types.Task) interface{} {
+	log.Printf("add: %v", task.Msg.ID)
 	return struct{}{}
 }
 
@@ -62,7 +62,8 @@ func Consume(queueName string) error {
 		nil,    // args
 	)
 
-	worker := NewWorker(10)
+	results := make(chan *types.Result)
+	worker := NewWorker(10, results)
 	worker.Register("tasks.add", add)
 	worker.Register("tasks.two", two)
 	worker.Start()
@@ -71,19 +72,20 @@ func Consume(queueName string) error {
 
 	go func() {
 		scheduler.Start()
-		in := scheduler.Consume()
-		for msg := range in {
-			reply := make(chan types.Result, 1)
-			err := worker.Dispatch(msg, reply)
+		for task := range scheduler.Consume() {
+			err := worker.Dispatch(task)
 			if err != nil {
 				log.Printf("Dispatch error: %v", err)
 				continue
 			}
+		}
+	}()
 
-			go func(reply <-chan types.Result) {
-				<-reply
-				// XXX: Ack
-			}(reply)
+	go func() {
+		for r := range results {
+			d := amqptransport.DeliveryFromContext(r.Task.Ctx)
+			d.Ack(false)
+			log.Printf("Acked: %v", r.Task.Msg.ID)
 		}
 	}()
 
@@ -95,9 +97,13 @@ func Consume(queueName string) error {
 			log.Println(err)
 			continue
 		}
-		scheduler.Add(msg)
-		d.Ack(false)
+		task := types.NewTask(msg)
+		task.Ctx = amqptransport.NewContext(task.Ctx, d)
+		scheduler.Add(task)
 	}
+
+	forever := make(chan struct{})
+	<-forever
 
 	return nil
 }
