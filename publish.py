@@ -22,8 +22,26 @@ def two(d, key="value"):
     """
     pass
 
+@app.task()
+def unknown():
+    pass
+
 if __name__ == "__main__":
+    for i in xrange(200):
+        unknown.delay()
+
+    two.apply_async(args=["LAST"], countdown=10)
+    two.apply_async(args=["LATER"], countdown=2)
+
+    for i in xrange(10):
+        two.apply_async(args=["BULK"], countdown=10)
+
     add.delay(2, 3)
     two.delay(2)
+
+    unknown.delay()
+
     two.delay(None, key="foo")
     two.apply_async(args=["LATER"], countdown=2)
+
+    unknown.delay()

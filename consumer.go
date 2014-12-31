@@ -8,9 +8,9 @@ package gocelery
 import (
 	"log"
 	"os"
+	"time"
 
 	_ "github.com/gwik/gocelery/message/json"
-	amqptransport "github.com/gwik/gocelery/transport/amqp"
 	"github.com/gwik/gocelery/types"
 
 	"github.com/streadway/amqp"
@@ -26,30 +26,70 @@ func init() {
 	}
 }
 
-func two(task *types.Task) interface{} {
-	log.Printf("two: %v", task.Msg.ID)
+func two(task types.Task) interface{} {
+	<-time.After(time.Second * 10)
+	log.Printf("two: %v", task.Msg().ID)
 	return struct{}{}
 }
 
-func add(task *types.Task) interface{} {
-	log.Printf("add: %v", task.Msg.ID)
+func add(task types.Task) interface{} {
+	<-time.After(time.Millisecond * 200)
+	log.Printf("add: %v", task.Msg().ID)
 	return struct{}{}
 }
 
-func Consume(queueName string) error {
+type amqpTask struct {
+	msg *types.Message
+	d   amqp.Delivery
+}
+
+func (t *amqpTask) Msg() *types.Message {
+	return t.msg
+}
+
+func (t *amqpTask) Ack() {
+	t.d.Ack(false)
+}
+
+type amqpConsumer struct {
+	q    string
+	out  chan types.Task
+	quit chan struct{}
+}
+
+func AMQPSubscriber(queueName string) types.Subscriber {
+	c := &amqpConsumer{
+		q:    queueName,
+		out:  make(chan types.Task),
+		quit: make(chan struct{}),
+	}
+	go c.loop()
+	return c
+}
+
+func (c *amqpConsumer) Subscribe() <-chan types.Task {
+	return c.out
+}
+
+func (c *amqpConsumer) Close() error {
+	close(c.quit)
+	return nil
+}
+
+func (c *amqpConsumer) loop() {
 	ch, err := connection.Channel()
 	if err != nil {
-		return err
+		return
 	}
 	defer ch.Close()
 
 	q, err := ch.QueueDeclare(
-		queueName, // name
-		true,      // durable
-		false,     // delete when usused
-		false,     // exclusive
-		false,     // no-wait
-		nil,       // arguments
+		c.q,   // name
+		true,  // durable
+		false, // delete when usused
+		false, // exclusive
+		false, // no-wait
+		nil,   // arguments
 	)
 
 	msgs, err := ch.Consume(
@@ -62,45 +102,41 @@ func Consume(queueName string) error {
 		nil,    // args
 	)
 
-	results := make(chan *types.Result)
-	worker := NewWorker(10, results)
+	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
+
+	var task types.Task
+	var out chan types.Task
+	in := msgs
+
+	for {
+		select {
+		case d := <-in:
+			log.Printf("%s", d.Body)
+			msg, err := types.DecodeMessage(d.ContentType, d.Body)
+			if err != nil {
+				log.Println(err)
+			}
+			task = &amqpTask{msg, d}
+			out = c.out
+			in = nil
+		case out <- task:
+			out = nil
+			in = msgs
+		case <-c.quit:
+			close(c.out)
+		}
+	}
+
+}
+
+func Consume(queueName string) error {
+
+	in := Schedule(AMQPSubscriber("celery"))
+	worker := NewWorker(10, in)
+
 	worker.Register("tasks.add", add)
 	worker.Register("tasks.two", two)
 	worker.Start()
-
-	scheduler := NewScheduler()
-
-	go func() {
-		scheduler.Start()
-		for task := range scheduler.Consume() {
-			err := worker.Dispatch(task)
-			if err != nil {
-				log.Printf("Dispatch error: %v", err)
-				continue
-			}
-		}
-	}()
-
-	go func() {
-		for r := range results {
-			d := amqptransport.DeliveryFromContext(r.Task.Ctx)
-			d.Ack(false)
-			log.Printf("Acked: %v", r.Task.Msg.ID)
-		}
-	}()
-
-	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
-	for d := range msgs {
-		log.Printf("%s", d.Body)
-		msg, err := types.DecodeMessage(d.ContentType, d.Body)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		task := types.NewTask(msg)
-		task.Ctx = amqptransport.NewContext(task.Ctx, d)
-		scheduler.Add(task)
-	}
 
 	forever := make(chan struct{})
 	<-forever

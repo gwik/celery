@@ -6,27 +6,29 @@ See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 package types
 
 import (
-	"code.google.com/p/go.net/context"
+	"time"
 )
 
-type Task struct {
-	Msg *Message
-	Ctx context.Context
+type Task interface {
+	Msg() *Message
+	Ack()
+}
+
+type Subscriber interface {
+	Subscribe() <-chan Task
+	Close() error
 }
 
 type Result struct {
-	Task *Task
+	task Task
 }
 
-func NewResult(task *Task) *Result {
-	return &Result{Task: task}
+func IsReady(t Task) bool {
+	return time.Now().After(t.Msg().ETA)
 }
 
-func NewTask(msg *Message) *Task {
-	return &Task{
-		Msg: msg,
-		Ctx: context.Background(),
-	}
+func NewResult(task Task) *Result {
+	return &Result{task: task}
 }
 
-type HandleFunc func(*Task) interface{}
+type HandleFunc func(Task) interface{}

@@ -6,7 +6,6 @@ See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 package gocelery
 
 import (
-	"fmt"
 	"log"
 
 	"github.com/gwik/gocelery/syncutil"
@@ -14,15 +13,16 @@ import (
 )
 
 type job struct {
-	task    *types.Task
+	task    types.Task
 	handler types.HandleFunc
 }
 
 type Worker struct {
 	handlerReg map[string]types.HandleFunc
-	ch         chan *job
+	sub        <-chan types.Task
 	gate       *syncutil.Gate
-	resultChan chan<- *types.Result
+	results    chan *types.Result
+	quit       chan struct{}
 }
 
 type key int
@@ -31,13 +31,18 @@ const (
 	dispatchedAt key = 0
 )
 
-func NewWorker(concurrency int, resultChan chan<- *types.Result) *Worker {
+func NewWorker(concurrency int, sub types.Subscriber) *Worker {
 	return &Worker{
 		handlerReg: make(map[string]types.HandleFunc),
-		ch:         make(chan *job),
+		sub:        sub.Subscribe(),
 		gate:       syncutil.NewGate(concurrency),
-		resultChan: resultChan,
+		results:    make(chan *types.Result),
+		quit:       make(chan struct{}),
 	}
+}
+
+func (w *Worker) Results() <-chan *types.Result {
+	return w.results
 }
 
 func (w *Worker) Register(name string, h types.HandleFunc) {
@@ -47,36 +52,32 @@ func (w *Worker) Register(name string, h types.HandleFunc) {
 	w.handlerReg[name] = h
 }
 
-// Dispatch run the job.
-func (w *Worker) Dispatch(t *types.Task) error {
-	log.Printf("Dispatch %s", t.Msg.Task)
-	h, exists := w.handlerReg[t.Msg.Task]
-	if !exists {
-		return fmt.Errorf("No handler for task: %s", t.Msg.Task)
-	}
-	w.ch <- &job{t, h}
-	return nil
-}
-
 func (w *Worker) Start() {
-	go w.work()
+	go w.loop()
 }
 
-func (w *Worker) Stop() {
-}
-
-func (w *Worker) work() {
+func (w *Worker) loop() {
 	for {
 		select {
-		case job := <-w.ch:
-			w.gate.Start()
-			go func() {
-				defer w.gate.Done()
-				job.handler(job.task)
-				w.resultChan <- types.NewResult(job.task)
-			}()
-			// case <-w.ctx.Done():
-			// 	return
+		case t := <-w.sub: // TODO deal with channel closing
+			log.Printf("Dispatch %s", t.Msg().Task)
+			h, exists := w.handlerReg[t.Msg().Task]
+			if !exists {
+				log.Printf("No handler for task: %s", t.Msg().Task)
+				t.Ack() // FIXME
+			} else {
+				j := &job{t, h}
+				w.gate.Start()
+				go func(j *job) {
+					defer w.gate.Done()
+					j.handler(j.task) // send function return through result
+					j.task.Ack()
+					//w.results <- types.NewResult(j.task)
+				}(j)
+			}
+		case <-w.quit:
+			return
 		}
+		// TODO quit
 	}
 }

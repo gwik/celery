@@ -8,12 +8,12 @@ import (
 	"github.com/gwik/gocelery/types"
 )
 
-type table []*types.Task
+type table []types.Task
 
 func (t table) Len() int { return len(t) }
 
 func (t table) Less(i, j int) bool {
-	return t[i].Msg.ETA.Before(t[j].Msg.ETA)
+	return t[i].Msg().ETA.Before(t[j].Msg().ETA)
 }
 
 func (t table) Swap(i, j int) {
@@ -21,7 +21,7 @@ func (t table) Swap(i, j int) {
 }
 
 func (t *table) Push(task interface{}) {
-	*t = append(*t, task.(*types.Task))
+	*t = append(*t, task.(types.Task))
 }
 
 func (t *table) Pop() interface{} {
@@ -32,67 +32,69 @@ func (t *table) Pop() interface{} {
 	return task
 }
 
-func (t table) Top() *types.Task {
+func (t table) Top() types.Task {
 	if len(t) == 0 {
 		return nil
 	}
 	return t[0]
 }
 
-type Scheduler struct {
-	t       *table
-	inChan  chan *types.Task
-	outChan chan *types.Task
+type scheduler struct {
+	t    *table
+	sub  <-chan types.Task
+	out  chan types.Task
+	quit chan struct{}
 }
 
-func NewScheduler() *Scheduler {
+func Schedule(sub types.Subscriber) types.Subscriber {
 	t := make(table, 0, 32)
 	heap.Init(&t)
 
-	return &Scheduler{
-		t:       &t,
-		inChan:  make(chan *types.Task),
-		outChan: make(chan *types.Task),
+	sched := &scheduler{
+		t:    &t,
+		sub:  sub.Subscribe(),
+		out:  make(chan types.Task),
+		quit: make(chan struct{}),
+	}
+
+	go sched.loop()
+	return sched
+}
+
+func (s *scheduler) Subscribe() <-chan types.Task {
+	return s.out
+}
+
+func (s *scheduler) loop() {
+	var timer <-chan time.Time
+	for {
+		top := s.t.Top()
+		if top != nil {
+			delay := top.Msg().ETA.Sub(time.Now())
+			timer = time.After(delay)
+			log.Printf("next pop in %s", delay)
+		} else {
+			timer = nil
+			log.Println("wait for tasks...")
+		}
+
+		select {
+		case task, ok := <-s.sub:
+			if ok {
+				heap.Push(s.t, task)
+			} else {
+				close(s.quit)
+			}
+		case <-timer:
+			s.out <- heap.Pop(s.t).(types.Task)
+		case <-s.quit:
+			close(s.out)
+			return
+		}
 	}
 }
 
-func (s *Scheduler) Add(task *types.Task) {
-	s.inChan <- task
-}
-
-func (s *Scheduler) Start() {
-	go func() {
-		never := make(chan time.Time)
-		for {
-			var timer <-chan time.Time
-			top := s.t.Top()
-			if top != nil {
-				delay := top.Msg.ETA.Sub(time.Now())
-				timer = time.After(delay)
-				log.Printf("next pop in %s", delay)
-			} else {
-				timer = never
-				log.Println("wait for tasks...")
-			}
-
-			select {
-			case task, ok := <-s.inChan:
-				if !ok {
-					close(s.outChan)
-					return
-				}
-				heap.Push(s.t, task)
-			case <-timer:
-				s.outChan <- heap.Pop(s.t).(*types.Task)
-			}
-		}
-	}()
-}
-
-func (s *Scheduler) Stop() {
-	close(s.inChan)
-}
-
-func (s *Scheduler) Consume() <-chan *types.Task {
-	return s.outChan
+func (s *scheduler) Close() error {
+	close(s.quit)
+	return nil
 }
