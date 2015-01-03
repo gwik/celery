@@ -1,3 +1,8 @@
+/*
+Copyright (c) 2014 Antonin Amand <antonin.amand@gmail.com>, All rights reserved.
+See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
+*/
+
 package gocelery
 
 import (
@@ -42,7 +47,7 @@ func (t table) Top() types.Task {
 type scheduler struct {
 	t    *table
 	sub  <-chan types.Task
-	out  chan types.Task
+	pub  chan types.Task
 	quit chan struct{}
 }
 
@@ -53,7 +58,7 @@ func Schedule(sub types.Subscriber) types.Subscriber {
 	sched := &scheduler{
 		t:    &t,
 		sub:  sub.Subscribe(),
-		out:  make(chan types.Task),
+		pub:  make(chan types.Task),
 		quit: make(chan struct{}),
 	}
 
@@ -62,7 +67,7 @@ func Schedule(sub types.Subscriber) types.Subscriber {
 }
 
 func (s *scheduler) Subscribe() <-chan types.Task {
-	return s.out
+	return s.pub
 }
 
 func (s *scheduler) loop() {
@@ -86,9 +91,9 @@ func (s *scheduler) loop() {
 				close(s.quit)
 			}
 		case <-timer:
-			s.out <- heap.Pop(s.t).(types.Task)
+			s.pub <- heap.Pop(s.t).(types.Task)
 		case <-s.quit:
-			close(s.out)
+			close(s.pub)
 			return
 		}
 	}

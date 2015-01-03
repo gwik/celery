@@ -7,15 +7,12 @@ package gocelery
 
 import (
 	"log"
+	"sync/atomic"
+	"time"
 
 	"github.com/gwik/gocelery/syncutil"
 	"github.com/gwik/gocelery/types"
 )
-
-type job struct {
-	task    types.Task
-	handler types.HandleFunc
-}
 
 type Worker struct {
 	handlerReg map[string]types.HandleFunc
@@ -23,6 +20,9 @@ type Worker struct {
 	gate       *syncutil.Gate
 	results    chan *types.Result
 	quit       chan struct{}
+
+	completed uint64
+	running   uint32
 }
 
 type key int
@@ -57,6 +57,13 @@ func (w *Worker) Start() {
 }
 
 func (w *Worker) loop() {
+	go func() {
+		for {
+			<-time.After(time.Second * 1)
+			log.Printf("%d jobs completed, %d running", atomic.LoadInt64(&w.completed), atomic.LoadInt32(&w.running))
+		}
+	}()
+
 	for {
 		select {
 		case t := <-w.sub: // TODO deal with channel closing
@@ -66,14 +73,16 @@ func (w *Worker) loop() {
 				log.Printf("No handler for task: %s", t.Msg().Task)
 				t.Ack() // FIXME
 			} else {
-				j := &job{t, h}
 				w.gate.Start()
-				go func(j *job) {
+				atomic.AddUInt32(&w.running, 1)
+				go func(t types.Task, h types.HandleFunc) {
+					defer atomic.AddUInt32(&w.running, ^uint32(0)) // -1
+					defer atomic.AddUInt64(&w.completed, 1)
 					defer w.gate.Done()
-					j.handler(j.task) // send function return through result
-					j.task.Ack()
+					h(t) // send function return through result
+					t.Ack()
 					//w.results <- types.NewResult(j.task)
-				}(j)
+				}(t, h)
 			}
 		case <-w.quit:
 			return
