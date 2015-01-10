@@ -20,6 +20,7 @@ type Worker struct {
 	gate       *syncutil.Gate
 	results    chan *types.Result
 	quit       chan struct{}
+	backend    types.Backend
 
 	completed uint64
 	running   uint32
@@ -31,13 +32,14 @@ const (
 	dispatchedAt key = 0
 )
 
-func NewWorker(concurrency int, sub types.Subscriber) *Worker {
+func NewWorker(concurrency int, sub types.Subscriber, backend types.Backend) *Worker {
 	return &Worker{
 		handlerReg: make(map[string]types.HandleFunc),
 		sub:        sub.Subscribe(),
 		gate:       syncutil.NewGate(concurrency),
 		results:    make(chan *types.Result),
 		quit:       make(chan struct{}),
+		backend:    backend,
 	}
 }
 
@@ -60,7 +62,7 @@ func (w *Worker) loop() {
 	go func() {
 		for {
 			<-time.After(time.Second * 1)
-			log.Printf("%d jobs completed, %d running", atomic.LoadInt64(&w.completed), atomic.LoadInt32(&w.running))
+			log.Printf("%d jobs completed, %d running", atomic.LoadUint64(&w.completed), atomic.LoadUint32(&w.running))
 		}
 	}()
 
@@ -74,13 +76,20 @@ func (w *Worker) loop() {
 				t.Ack() // FIXME
 			} else {
 				w.gate.Start()
-				atomic.AddUInt32(&w.running, 1)
+				atomic.AddUint32(&w.running, 1)
 				go func(t types.Task, h types.HandleFunc) {
-					defer atomic.AddUInt32(&w.running, ^uint32(0)) // -1
-					defer atomic.AddUInt64(&w.completed, 1)
+					defer atomic.AddUint32(&w.running, ^uint32(0)) // -1
+					defer atomic.AddUint64(&w.completed, 1)
 					defer w.gate.Done()
-					h(t) // send function return through result
+
+					v := h(t) // send function return through result
 					t.Ack()
+					log.Printf("%s result: %v", t.Msg().ID, v)
+					w.backend.Publish(t, &types.ResultMeta{
+						Status: types.SUCCESS,
+						Result: v,
+						TaskId: t.Msg().ID,
+					})
 					//w.results <- types.NewResult(j.task)
 				}(t, h)
 			}

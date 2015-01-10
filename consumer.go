@@ -33,9 +33,9 @@ func two(task types.Task) interface{} {
 }
 
 func add(task types.Task) interface{} {
-	<-time.After(time.Millisecond * 200)
 	log.Printf("add: %v", task.Msg().ID)
-	return struct{}{}
+	args := task.Msg().Args
+	return args[0].(float64) + args[1].(float64)
 }
 
 type amqpTask struct {
@@ -111,7 +111,7 @@ func (c *amqpConsumer) loop() {
 	for {
 		select {
 		case d := <-in:
-			log.Printf("%s", d.Body)
+			log.Printf("%s %s", d.Body, d.ReplyTo)
 			msg, err := types.DecodeMessage(d.ContentType, d.Body)
 			if err != nil {
 				log.Println(err)
@@ -132,7 +132,8 @@ func (c *amqpConsumer) loop() {
 func Consume(queueName string) error {
 
 	in := Schedule(AMQPSubscriber("celery"))
-	worker := NewWorker(10, in)
+	backend := NewAMQPBackend()
+	worker := NewWorker(10, in, backend)
 
 	worker.Register("tasks.add", add)
 	worker.Register("tasks.two", two)

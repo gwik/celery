@@ -19,16 +19,8 @@ type Subscriber interface {
 	Close() error
 }
 
-type Result struct {
-	task Task
-}
-
 func IsReady(t Task) bool {
 	return time.Now().After(t.Msg().ETA)
-}
-
-func NewResult(task Task) *Result {
-	return &Result{task: task}
 }
 
 type HandleFunc func(Task) interface{}
