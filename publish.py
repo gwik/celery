@@ -58,6 +58,6 @@ if __name__ == "__main__":
         result = add.delay(2, 3)
         print result.get()
 
-    ex_result()
-    # ex1()
+    # ex_result()
+    ex1()
 

@@ -13,12 +13,12 @@ import (
 	"github.com/gwik/gocelery/types"
 )
 
-type table []types.Task
+type table []*types.TaskContext
 
 func (t table) Len() int { return len(t) }
 
 func (t table) Less(i, j int) bool {
-	return t[i].Msg().ETA.Before(t[j].Msg().ETA)
+	return t[i].T.Msg().ETA.Before(t[j].T.Msg().ETA)
 }
 
 func (t table) Swap(i, j int) {
@@ -26,7 +26,7 @@ func (t table) Swap(i, j int) {
 }
 
 func (t *table) Push(task interface{}) {
-	*t = append(*t, task.(types.Task))
+	*t = append(*t, task.(*types.TaskContext))
 }
 
 func (t *table) Pop() interface{} {
@@ -37,7 +37,7 @@ func (t *table) Pop() interface{} {
 	return task
 }
 
-func (t table) Top() types.Task {
+func (t table) Top() *types.TaskContext {
 	if len(t) == 0 {
 		return nil
 	}
@@ -46,8 +46,8 @@ func (t table) Top() types.Task {
 
 type scheduler struct {
 	t    *table
-	sub  <-chan types.Task
-	pub  chan types.Task
+	sub  <-chan types.TaskContext
+	pub  chan types.TaskContext
 	quit chan struct{}
 }
 
@@ -58,7 +58,7 @@ func Schedule(sub types.Subscriber) types.Subscriber {
 	sched := &scheduler{
 		t:    &t,
 		sub:  sub.Subscribe(),
-		pub:  make(chan types.Task),
+		pub:  make(chan types.TaskContext),
 		quit: make(chan struct{}),
 	}
 
@@ -66,7 +66,7 @@ func Schedule(sub types.Subscriber) types.Subscriber {
 	return sched
 }
 
-func (s *scheduler) Subscribe() <-chan types.Task {
+func (s *scheduler) Subscribe() <-chan types.TaskContext {
 	return s.pub
 }
 
@@ -75,7 +75,7 @@ func (s *scheduler) loop() {
 	for {
 		top := s.t.Top()
 		if top != nil {
-			delay := top.Msg().ETA.Sub(time.Now())
+			delay := top.T.Msg().ETA.Sub(time.Now())
 			timer = time.After(delay)
 			log.Printf("next pop in %s", delay)
 		} else {
@@ -86,12 +86,12 @@ func (s *scheduler) loop() {
 		select {
 		case task, ok := <-s.sub:
 			if ok {
-				heap.Push(s.t, task)
+				heap.Push(s.t, &task)
 			} else {
 				close(s.quit)
 			}
 		case <-timer:
-			s.pub <- heap.Pop(s.t).(types.Task)
+			s.pub <- *heap.Pop(s.t).(*types.TaskContext)
 		case <-s.quit:
 			close(s.pub)
 			return

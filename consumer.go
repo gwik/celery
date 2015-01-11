@@ -14,22 +14,13 @@ import (
 	"github.com/gwik/gocelery/types"
 
 	"github.com/streadway/amqp"
+	"golang.org/x/net/context"
 )
-
-var connection *amqp.Connection
-
-func init() {
-	var err error
-	connection, err = amqp.Dial(os.Getenv("AMQP_URL"))
-	if err != nil {
-		panic(err)
-	}
-}
 
 func two(task types.Task) interface{} {
 	<-time.After(time.Second * 10)
 	log.Printf("two: %v", task.Msg().ID)
-	return struct{}{}
+	return nil
 }
 
 func add(task types.Task) interface{} {
@@ -40,34 +31,62 @@ func add(task types.Task) interface{} {
 
 type amqpTask struct {
 	msg *types.Message
-	d   amqp.Delivery
+	ch  *amqp.Channel
+	tag uint64 // delivery tag
 }
 
 func (t *amqpTask) Msg() *types.Message {
 	return t.msg
 }
 
-func (t *amqpTask) Ack() {
-	t.d.Ack(false)
+func (t *amqpTask) Ack() error {
+	return t.ch.Ack(t.tag, false)
+}
+
+func (t *amqpTask) Reject(requeue bool) error {
+	return t.ch.Reject(t.tag, requeue)
 }
 
 type amqpConsumer struct {
 	q    string
-	out  chan types.Task
+	out  chan types.TaskContext
 	quit chan struct{}
 }
 
-func AMQPSubscriber(queueName string) types.Subscriber {
+type quitContext chan struct{}
+
+func (qc quitContext) Done() <-chan struct{} {
+	return qc
+}
+
+func (qc quitContext) Deadline() (deadline time.Time, ok bool) {
+	return
+}
+
+func (qc quitContext) Value(key interface{}) interface{} {
+	return nil
+}
+
+func (qc quitContext) Err() error {
+	select {
+	case <-qc:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+func AMQPSubscriber(queueName string) *amqpConsumer {
 	c := &amqpConsumer{
 		q:    queueName,
-		out:  make(chan types.Task),
+		out:  make(chan types.TaskContext),
 		quit: make(chan struct{}),
 	}
 	go c.loop()
 	return c
 }
 
-func (c *amqpConsumer) Subscribe() <-chan types.Task {
+func (c *amqpConsumer) Subscribe() <-chan types.TaskContext {
 	return c.out
 }
 
@@ -76,64 +95,93 @@ func (c *amqpConsumer) Close() error {
 	return nil
 }
 
-func (c *amqpConsumer) loop() {
-	ch, err := connection.Channel()
-	if err != nil {
-		return
+func (c *amqpConsumer) connect() (*amqp.Channel, <-chan amqp.Delivery) {
+	url := os.Getenv("AMQP_URL")
+	for {
+		connection, err := amqp.Dial(url)
+		if err != nil {
+			log.Printf("could not connect to %s: %v, will retry...", url, err)
+			<-time.After(time.Second * 2)
+			continue
+		}
+
+		ch, err := connection.Channel()
+		if err != nil {
+			if err == amqp.ErrClosed {
+				continue
+			}
+			log.Println("unexpected AMQP Channel error: %v", err)
+			panic(err)
+		}
+
+		q, err := ch.QueueDeclare(
+			c.q,   // name
+			true,  // durable
+			false, // delete when usused
+			false, // exclusive
+			false, // no-wait
+			nil,   // arguments
+		)
+
+		msgs, err := ch.Consume(
+			q.Name, // queue
+			"",     // consumer
+			false,  // auto-ack
+			false,  // exclusive
+			false,  // no-local
+			false,  // no-wait
+			nil,    // args
+		)
+
+		return ch, msgs
 	}
-	defer ch.Close()
+}
 
-	q, err := ch.QueueDeclare(
-		c.q,   // name
-		true,  // durable
-		false, // delete when usused
-		false, // exclusive
-		false, // no-wait
-		nil,   // arguments
-	)
+func (c *amqpConsumer) loop() {
 
-	msgs, err := ch.Consume(
-		q.Name, // queue
-		"",     // consumer
-		false,  // auto-ack
-		false,  // exclusive
-		false,  // no-local
-		false,  // no-wait
-		nil,    // args
-	)
-
-	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
-
-	var task types.Task
-	var out chan types.Task
+	var task types.TaskContext
+	var out chan types.TaskContext
+	ch, msgs := c.connect()
 	in := msgs
 
 	for {
 		select {
-		case d := <-in:
+		case d, ok := <-in:
+			if !ok {
+				close(c.quit)
+				return
+			}
 			log.Printf("%s %s", d.Body, d.ReplyTo)
 			msg, err := types.DecodeMessage(d.ContentType, d.Body)
 			if err != nil {
 				log.Println(err)
+				d.Reject(true)
+				continue
 			}
-			task = &amqpTask{msg, d}
+			ctx := types.ContextFromMessage(quitContext(c.quit), msg)
+			task = types.TaskContext{T: &amqpTask{msg, ch, d.DeliveryTag}, C: ctx}
 			out = c.out
 			in = nil
 		case out <- task:
 			out = nil
 			in = msgs
 		case <-c.quit:
-			close(c.out)
+			return
 		}
 	}
 
 }
 
+type noopBackend struct{}
+
+func (noopBackend) Publish(types.Task, *types.ResultMeta) {}
+
 func Consume(queueName string) error {
 
 	in := Schedule(AMQPSubscriber("celery"))
-	backend := NewAMQPBackend()
-	worker := NewWorker(10, in, backend)
+
+	// backend := NewAMQPBackend()
+	worker := NewWorker(10, in, noopBackend{})
 
 	worker.Register("tasks.add", add)
 	worker.Register("tasks.two", two)

@@ -7,15 +7,24 @@ package types
 
 import (
 	"time"
+
+	"golang.org/x/net/context"
 )
 
 type Task interface {
 	Msg() *Message
-	Ack()
+	Ack() error
+	Reject(requeue bool) error
+}
+
+// Task bundled with a context. used to pass through channels.
+type TaskContext struct {
+	C context.Context
+	T Task
 }
 
 type Subscriber interface {
-	Subscribe() <-chan Task
+	Subscribe() <-chan TaskContext
 	Close() error
 }
 

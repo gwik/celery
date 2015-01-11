@@ -8,6 +8,8 @@ package types
 import (
 	"fmt"
 	"time"
+
+	"golang.org/x/net/context"
 )
 
 // Message as describe at http://celery.readthedocs.org/en/latest/internals/protocol.html
@@ -38,6 +40,14 @@ func DecodeMessage(contentType string, p []byte) (*Message, error) {
 		return nil, fmt.Errorf("No decoder registered for %s", contentType)
 	}
 	return dec(p)
+}
+
+func ContextFromMessage(parent context.Context, msg *Message) context.Context {
+	if msg.Expires.IsZero() {
+		ctx, _ := context.WithDeadline(parent, msg.Expires)
+		return ctx
+	}
+	return parent
 }
 
 func init() {

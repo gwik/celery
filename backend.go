@@ -8,6 +8,7 @@ package gocelery
 import (
 	"encoding/json"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -48,6 +49,8 @@ func routingKey(tid string) string {
 }
 
 func (b *amqpBackend) loop() {
+
+	connection, _ := amqp.Dial(os.Getenv("AMQP_URL"))
 
 	ch, err := connection.Channel()
 	if err != nil {

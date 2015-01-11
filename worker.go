@@ -16,7 +16,7 @@ import (
 
 type Worker struct {
 	handlerReg map[string]types.HandleFunc
-	sub        <-chan types.Task
+	sub        <-chan types.TaskContext
 	gate       *syncutil.Gate
 	results    chan *types.Result
 	quit       chan struct{}
@@ -68,12 +68,20 @@ func (w *Worker) loop() {
 
 	for {
 		select {
-		case t := <-w.sub: // TODO deal with channel closing
-			log.Printf("Dispatch %s", t.Msg().Task)
-			h, exists := w.handlerReg[t.Msg().Task]
+		case t, ok := <-w.sub:
+			if !ok {
+				close(w.quit)
+				continue
+			}
+
+			msg := t.T.Msg()
+			taskName := msg.Task
+			log.Printf("Dispatch %s", taskName)
+			h, exists := w.handlerReg[taskName]
+
 			if !exists {
-				log.Printf("No handler for task: %s", t.Msg().Task)
-				t.Ack() // FIXME
+				log.Printf("No handler for task: %s", taskName)
+				t.T.Ack() // FIXME
 			} else {
 				w.gate.Start()
 				atomic.AddUint32(&w.running, 1)
@@ -84,14 +92,14 @@ func (w *Worker) loop() {
 
 					v := h(t) // send function return through result
 					t.Ack()
-					log.Printf("%s result: %v", t.Msg().ID, v)
+					log.Printf("%s result: %v", msg.ID, v)
 					w.backend.Publish(t, &types.ResultMeta{
 						Status: types.SUCCESS,
 						Result: v,
-						TaskId: t.Msg().ID,
+						TaskId: msg.ID,
 					})
 					//w.results <- types.NewResult(j.task)
-				}(t, h)
+				}(t.T, h)
 			}
 		case <-w.quit:
 			return
