@@ -29,7 +29,7 @@ type Worker struct {
 type key int
 
 const (
-	dispatchedAt key = 0
+	keyTask key = 0
 )
 
 func NewWorker(concurrency int, sub types.Subscriber, backend types.Backend) *Worker {
@@ -58,6 +58,18 @@ func (w *Worker) Start() {
 	go w.loop()
 }
 
+const (
+	taskKey = key(0)
+)
+
+func MsgFromContext(ctx context.Context) {
+	return ctx.Value(keyTask).(*types.Task).Msg()
+}
+
+func setJobContext(ctx context.Context, t *types.Task) context.Context {
+	return ctx.WithValue(taskKey, t)
+}
+
 func (w *Worker) loop() {
 	go func() {
 		for {
@@ -70,36 +82,41 @@ func (w *Worker) loop() {
 		select {
 		case t, ok := <-w.sub:
 			if !ok {
-				close(w.quit)
 				continue
 			}
 
-			msg := t.T.Msg()
-			taskName := msg.Task
-			log.Printf("Dispatch %s", taskName)
-			h, exists := w.handlerReg[taskName]
+			task, ctx := t.T, t.C
+
+			log.Printf("Dispatch %s", msg.Task)
+			h, exists := w.handlerReg[msg.Task]
 
 			if !exists {
-				log.Printf("No handler for task: %s", taskName)
-				t.T.Ack() // FIXME
+				log.Printf("No handler for task: %s", msg.Task)
+				t.T.Reject(true)
 			} else {
+
 				w.gate.Start()
 				atomic.AddUint32(&w.running, 1)
-				go func(t types.Task, h types.HandleFunc) {
+				jobCtx := setContext(ctx, task)
+				// jobCtx, cancel := context.WithCancel(jobCtx)
+
+				go func() {
+
 					defer atomic.AddUint32(&w.running, ^uint32(0)) // -1
 					defer atomic.AddUint64(&w.completed, 1)
 					defer w.gate.Done()
 
-					v := h(t) // send function return through result
+					v := h(jobCtx, msg.Args, msg.KwArgs) // send function return through result
 					t.Ack()
 					log.Printf("%s result: %v", msg.ID, v)
+
 					w.backend.Publish(t, &types.ResultMeta{
 						Status: types.SUCCESS,
 						Result: v,
 						TaskId: msg.ID,
 					})
 					//w.results <- types.NewResult(j.task)
-				}(t.T, h)
+				}()
 			}
 		case <-w.quit:
 			return
