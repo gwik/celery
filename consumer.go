@@ -12,22 +12,11 @@ import (
 
 	_ "github.com/gwik/gocelery/message/json"
 	"github.com/gwik/gocelery/types"
+	"github.com/gwik/gocelery/util/amqputil"
 
 	"github.com/streadway/amqp"
 	"golang.org/x/net/context"
 )
-
-func two(task types.Task) interface{} {
-	<-time.After(time.Second * 10)
-	log.Printf("two: %v", task.Msg().ID)
-	return nil
-}
-
-func add(task types.Task) interface{} {
-	log.Printf("add: %v", task.Msg().ID)
-	args := task.Msg().Args
-	return args[0].(float64) + args[1].(float64)
-}
 
 type amqpTask struct {
 	msg *types.Message
@@ -53,29 +42,6 @@ type amqpConsumer struct {
 	quit chan struct{}
 }
 
-type quitContext chan struct{}
-
-func (qc quitContext) Done() <-chan struct{} {
-	return qc
-}
-
-func (qc quitContext) Deadline() (deadline time.Time, ok bool) {
-	return
-}
-
-func (qc quitContext) Value(key interface{}) interface{} {
-	return nil
-}
-
-func (qc quitContext) Err() error {
-	select {
-	case <-qc:
-		return context.Canceled
-	default:
-		return nil
-	}
-}
-
 func AMQPSubscriber(queueName string) *amqpConsumer {
 	c := &amqpConsumer{
 		q:    queueName,
@@ -95,61 +61,67 @@ func (c *amqpConsumer) Close() error {
 	return nil
 }
 
-func (c *amqpConsumer) connect() (*amqp.Channel, <-chan amqp.Delivery) {
-	url := os.Getenv("AMQP_URL")
-	for {
-		connection, err := amqp.Dial(url)
-		if err != nil {
-			log.Printf("could not connect to %s: %v, will retry...", url, err)
-			<-time.After(time.Second * 2)
-			continue
-		}
-
-		ch, err := connection.Channel()
-		if err != nil {
-			if err == amqp.ErrClosed {
-				continue
-			}
-			log.Println("unexpected AMQP Channel error: %v", err)
-			panic(err)
-		}
-
-		q, err := ch.QueueDeclare(
-			c.q,   // name
-			true,  // durable
-			false, // delete when usused
-			false, // exclusive
-			false, // no-wait
-			nil,   // arguments
-		)
-
-		msgs, err := ch.Consume(
-			q.Name, // queue
-			"",     // consumer
-			false,  // auto-ack
-			false,  // exclusive
-			false,  // no-local
-			false,  // no-wait
-			nil,    // args
-		)
-
-		return ch, msgs
+func (c *amqpConsumer) declare(ch *amqp.Channel) (<-chan amqp.Delivery, error) {
+	q, err := ch.QueueDeclare(
+		c.q,   // name
+		true,  // durable
+		false, // delete when usused
+		false, // exclusive
+		false, // no-wait
+		nil,   // arguments
+	)
+	if err != nil {
+		return nil, err
 	}
+
+	msgs, err := ch.Consume(
+		q.Name, // queue
+		"",     // consumer
+		false,  // auto-ack
+		false,  // exclusive
+		false,  // no-local
+		false,  // no-wait
+		nil,    // args
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return msgs, nil
 }
 
 func (c *amqpConsumer) loop() {
 
-	var task types.TaskContext
+	var ch *amqp.Channel
+	var tc types.TaskContext
 	var out chan types.TaskContext
-	ch, msgs := c.connect()
-	in := msgs
+	var in, msgs <-chan amqp.Delivery
+
+	retrier := amqputil.NewAMQPRetry(os.Getenv("AMQP_URL"), nil, time.Second*5)
+	chch := retrier.Channel()
+
+	ctx, abort := context.WithCancel(context.Background())
 
 	for {
 		select {
+		case ch = <-chch:
+			var err error
+			msgs, err = c.declare(ch)
+			if err != nil {
+				if err != amqp.ErrClosed {
+					panic(err)
+				}
+				chch = retrier.Channel()
+				continue
+			}
+			chch = nil
+			in = msgs
 		case d, ok := <-in:
 			if !ok {
-				close(c.quit)
-				return
+				chch = retrier.Channel()
+				in = nil
+				abort()
+				continue
 			}
 			log.Printf("%s %s", d.Body, d.ReplyTo)
 			msg, err := types.DecodeMessage(d.ContentType, d.Body)
@@ -158,18 +130,29 @@ func (c *amqpConsumer) loop() {
 				d.Reject(true)
 				continue
 			}
-			ctx := types.ContextFromMessage(quitContext(c.quit), msg)
-			task = types.TaskContext{T: &amqpTask{msg, ch, d.DeliveryTag}, C: ctx}
+			ctx := types.ContextFromMessage(ctx, msg)
+			tc = types.TaskContext{T: &amqpTask{msg, ch, d.DeliveryTag}, C: ctx}
 			out = c.out
 			in = nil
-		case out <- task:
+		case out <- tc:
 			out = nil
 			in = msgs
 		case <-c.quit:
+			abort()
+			close(out)
 			return
 		}
 	}
 
+}
+
+func two(context context.Context, args []interface{}, kwargs map[string]interface{}) (interface{}, error) {
+	<-time.After(time.Second * 10)
+	return nil, nil
+}
+
+func add(context context.Context, args []interface{}, kwargs map[string]interface{}) (interface{}, error) {
+	return args[0].(float64) + args[1].(float64), nil
 }
 
 type noopBackend struct{}

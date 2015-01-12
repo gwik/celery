@@ -32,4 +32,31 @@ func IsReady(t Task) bool {
 	return time.Now().After(t.Msg().ETA)
 }
 
-type HandleFunc func(Task) interface{}
+// type RetryError struct {
+// 	err error
+// 	at  time.Time
+// }
+
+// func (re *RetryError) Error() string {
+// 	return err.Error()
+// }
+
+// func (re *RetryError) At() time.Time {
+// 	return re.At()
+// }
+
+// func RetryErr(err error, delay time.Duration) *RetryError {
+// 	return &RetryError{
+// 		err: err,
+// 		at:  time.Now().Add(delay),
+// 	}
+// }
+
+// func Retry(reason string, delay time.Duration) *RetryError {
+// 	return &RetryError{
+// 		err: errors.New(reason),
+// 		at:  time.Now().Add(delay),
+// 	}
+// }
+
+type HandleFunc func(context.Context, []interface{}, map[string]interface{}) (interface{}, error)

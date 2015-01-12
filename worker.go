@@ -90,7 +90,8 @@ func (w *Worker) loop() {
 					defer atomic.AddUint64(&w.completed, 1)
 					defer w.gate.Done()
 
-					v := h(t) // send function return through result
+					var v struct{}
+					// v := h(t) // send function return through result
 					t.Ack()
 					log.Printf("%s result: %v", msg.ID, v)
 					w.backend.Publish(t, &types.ResultMeta{
