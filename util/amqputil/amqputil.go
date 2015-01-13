@@ -25,7 +25,7 @@ func NewAMQPRetry(url string, config *amqp.Config, delay time.Duration) *AMQPRet
 		url:     url,
 		config:  config,
 		delay:   delay,
-		getters: make(chan chan *amqp.Channel),
+		getters: make(chan chan *amqp.Channel, 1024),
 	}
 
 	go ar.loop()
@@ -51,7 +51,6 @@ func (ar *AMQPRetry) connect() *amqp.Connection {
 			continue
 		}
 
-		log.Println("connected.")
 		return conn
 	}
 }
@@ -73,9 +72,13 @@ func (ar *AMQPRetry) loop() {
 }
 
 func (ar *AMQPRetry) Channel() <-chan *amqp.Channel {
-	ch := make(chan *amqp.Channel, 1)
-	go func() {
-		ar.getters <- ch
-	}()
-	return ch
+	getter := make(chan *amqp.Channel, 1)
+	select {
+	case ar.getters <- getter:
+	default:
+		go func() {
+			ar.getters <- getter
+		}()
+	}
+	return getter
 }
