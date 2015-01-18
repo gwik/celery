@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"reflect"
+	"runtime/debug"
 	"sync/atomic"
 	"time"
 
@@ -167,7 +168,7 @@ func (w *Worker) loop() {
 					defer w.gate.Done()
 					defer func() {
 						if r := recover(); r != nil {
-							fmt.Println("Recovered %s %v", msg.ID, r)
+							log.Printf("%s: %s", r, debug.Stack())
 						}
 						task.Reject(false)
 					}()
