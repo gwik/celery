@@ -77,12 +77,15 @@ func (w *Worker) RegisterFunc(name string, fn interface{}) {
 
 		res := vfn.Call(in)
 
-		if !res[0].IsNil() {
-			result = res[0].Interface()
+		if res[0].IsValid() {
+			result = res[1].Interface()
 		}
 
-		if !res[1].IsNil() {
-			err = res[1].Interface().(error)
+		if res[1].IsValid() {
+			errInf := res[1].Interface()
+			if errInf != nil {
+				err = errInf.(error)
+			}
 		}
 
 		return result, err
