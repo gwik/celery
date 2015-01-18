@@ -26,7 +26,7 @@ type Message struct {
 
 }
 
-type DecoderFunc func([]byte) (*Message, error)
+type DecoderFunc func([]byte) (Message, error)
 
 var messageDecoderRegister map[string]DecoderFunc
 
@@ -34,15 +34,15 @@ func RegisterMessageDecoder(contentType string, decoder DecoderFunc) {
 	messageDecoderRegister[contentType] = decoder
 }
 
-func DecodeMessage(contentType string, p []byte) (*Message, error) {
+func DecodeMessage(contentType string, p []byte) (Message, error) {
 	dec, exists := messageDecoderRegister[contentType]
 	if !exists {
-		return nil, fmt.Errorf("No decoder registered for %s", contentType)
+		return Message{}, fmt.Errorf("No decoder registered for %s", contentType)
 	}
 	return dec(p)
 }
 
-func ContextFromMessage(parent context.Context, msg *Message) context.Context {
+func ContextFromMessage(parent context.Context, msg Message) context.Context {
 	if msg.Expires.IsZero() {
 		ctx, _ := context.WithDeadline(parent, msg.Expires)
 		return ctx

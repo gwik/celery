@@ -32,6 +32,20 @@ def two(d, key="value"):
 def unknown():
     pass
 
+@app.task()
+def tryagain(delay):
+    pass
+
+
+@app.task()
+def byname(foo, bar):
+    pass
+
+@app.task()
+def panic(msg):
+    pass
+
+
 if __name__ == "__main__":
 
     def ex1():
@@ -58,6 +72,16 @@ if __name__ == "__main__":
         result = add.delay(2, 3)
         print result.get()
 
+    def retry():
+        tryagain.delay(0.1, 100)
+        tryagain.delay(10, 3)
+
+    def name():
+        byname.delay("foo", 10)
+        panic.delay("panic")
+
     # ex_result()
-    ex1()
+    # ex1()
+    # retry()
+    name()
 

@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/gwik/gocelery/types"
+	"github.com/gwik/celery/types"
 )
 
 type jsonMessage struct {
@@ -44,13 +44,13 @@ func (jm *jsonMessage) ExpiresAt() time.Time {
 	return t
 }
 
-func decodeJSONMessage(p []byte) (*types.Message, error) {
+func decodeJSONMessage(p []byte) (types.Message, error) {
 	m := &jsonMessage{}
 	err := json.Unmarshal(p, m)
 	if err != nil {
-		return nil, err
+		return types.Message{}, err
 	}
-	return &types.Message{
+	return types.Message{
 		Task:    m.Task,
 		ID:      m.ID,
 		Args:    m.Args,

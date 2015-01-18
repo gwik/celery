@@ -3,7 +3,7 @@ Copyright (c) 2014 Antonin Amand <antonin.amand@gmail.com>, All rights reserved.
 See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 */
 
-package gocelery
+package celery
 
 import (
 	"encoding/json"
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gwik/gocelery/types"
+	"github.com/gwik/celery/types"
 	"github.com/streadway/amqp"
 )
 

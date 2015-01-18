@@ -3,22 +3,29 @@ Copyright (c) 2014 Antonin Amand <antonin.amand@gmail.com>, All rights reserved.
 See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 */
 
-package gocelery
+package celery
 
 import (
 	"container/heap"
 	"log"
 	"time"
 
-	"github.com/gwik/gocelery/types"
+	"github.com/gwik/celery/types"
 )
 
-type table []*types.TaskContext
+type item struct {
+	eta time.Time
+	tc  types.TaskContext
+}
+
+var empty item = item{}
+
+type table []item
 
 func (t table) Len() int { return len(t) }
 
 func (t table) Less(i, j int) bool {
-	return t[i].T.Msg().ETA.Before(t[j].T.Msg().ETA)
+	return t[i].eta.Before(t[j].eta)
 }
 
 func (t table) Swap(i, j int) {
@@ -26,7 +33,7 @@ func (t table) Swap(i, j int) {
 }
 
 func (t *table) Push(task interface{}) {
-	*t = append(*t, task.(*types.TaskContext))
+	*t = append(*t, task.(item))
 }
 
 func (t *table) Pop() interface{} {
@@ -37,28 +44,30 @@ func (t *table) Pop() interface{} {
 	return task
 }
 
-func (t table) Top() *types.TaskContext {
+func (t table) Top() item {
 	if len(t) == 0 {
-		return nil
+		return empty
 	}
 	return t[0]
 }
 
-type scheduler struct {
+type Scheduler struct {
 	t    *table
 	sub  <-chan types.TaskContext
 	pub  chan types.TaskContext
+	back chan item
 	quit chan struct{}
 }
 
-func Schedule(sub types.Subscriber) types.Subscriber {
+func NewScheduler(sub types.Subscriber) *Scheduler {
 	t := make(table, 0, 32)
 	heap.Init(&t)
 
-	sched := &scheduler{
+	sched := &Scheduler{
 		t:    &t,
 		sub:  sub.Subscribe(),
 		pub:  make(chan types.TaskContext),
+		back: make(chan item),
 		quit: make(chan struct{}),
 	}
 
@@ -66,16 +75,20 @@ func Schedule(sub types.Subscriber) types.Subscriber {
 	return sched
 }
 
-func (s *scheduler) Subscribe() <-chan types.TaskContext {
+func (s *Scheduler) Publish(eta time.Time, t types.TaskContext) {
+	s.back <- item{eta, t}
+}
+
+func (s *Scheduler) Subscribe() <-chan types.TaskContext {
 	return s.pub
 }
 
-func (s *scheduler) loop() {
+func (s *Scheduler) loop() {
 	var timer <-chan time.Time
 	for {
 		top := s.t.Top()
-		if top != nil {
-			delay := top.T.Msg().ETA.Sub(time.Now())
+		if top != empty {
+			delay := top.eta.Sub(time.Now())
 			timer = time.After(delay)
 			log.Printf("next pop in %s", delay)
 		} else {
@@ -84,14 +97,16 @@ func (s *scheduler) loop() {
 		}
 
 		select {
-		case task, ok := <-s.sub:
+		case it := <-s.back:
+			heap.Push(s.t, it)
+		case tc, ok := <-s.sub:
 			if ok {
-				heap.Push(s.t, &task)
+				heap.Push(s.t, item{tc.T.Msg().ETA, tc})
 			} else {
 				close(s.quit)
 			}
 		case <-timer:
-			s.pub <- *heap.Pop(s.t).(*types.TaskContext)
+			s.pub <- heap.Pop(s.t).(item).tc
 		case <-s.quit:
 			close(s.pub)
 			return
@@ -99,7 +114,7 @@ func (s *scheduler) loop() {
 	}
 }
 
-func (s *scheduler) Close() error {
+func (s *Scheduler) Close() error {
 	close(s.quit)
 	return nil
 }

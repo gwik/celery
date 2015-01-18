@@ -3,16 +3,16 @@ Copyright (c) 2014 Antonin Amand <antonin.amand@gmail.com>, All rights reserved.
 See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 */
 
-package gocelery
+package celery
 
 import (
 	"log"
 	"os"
 	"time"
 
-	_ "github.com/gwik/gocelery/message/json"
-	"github.com/gwik/gocelery/types"
-	"github.com/gwik/gocelery/util/amqputil"
+	_ "github.com/gwik/celery/message/json"
+	"github.com/gwik/celery/types"
+	"github.com/gwik/celery/util/amqputil"
 
 	"github.com/streadway/amqp"
 	"golang.org/x/net/context"
@@ -24,8 +24,8 @@ type amqpTask struct {
 	tag uint64 // delivery tag
 }
 
-func (t *amqpTask) Msg() *types.Message {
-	return t.msg
+func (t *amqpTask) Msg() types.Message {
+	return *t.msg
 }
 
 func (t *amqpTask) Ack() error {
@@ -130,8 +130,8 @@ func (c *amqpConsumer) loop() {
 				d.Reject(true)
 				continue
 			}
-			ctx := types.ContextFromMessage(ctx, msg)
-			tc = types.TaskContext{T: &amqpTask{msg, ch, d.DeliveryTag}, C: ctx}
+			mctx := types.ContextFromMessage(ctx, msg)
+			tc = types.TaskContext{T: &amqpTask{&msg, ch, d.DeliveryTag}, C: mctx}
 			out = c.out
 			in = nil
 		case out <- tc:
@@ -144,34 +144,4 @@ func (c *amqpConsumer) loop() {
 		}
 	}
 
-}
-
-func two(context context.Context, args []interface{}, kwargs map[string]interface{}) (interface{}, error) {
-	<-time.After(time.Second * 10)
-	return nil, nil
-}
-
-func add(context context.Context, args []interface{}, kwargs map[string]interface{}) (interface{}, error) {
-	return args[0].(float64) + args[1].(float64), nil
-}
-
-type noopBackend struct{}
-
-func (noopBackend) Publish(types.Task, *types.ResultMeta) {}
-
-func Consume(queueName string) error {
-
-	in := Schedule(AMQPSubscriber("celery"))
-
-	// backend := NewAMQPBackend()
-	worker := NewWorker(10, in, noopBackend{})
-
-	worker.Register("tasks.add", add)
-	worker.Register("tasks.two", two)
-	worker.Start()
-
-	forever := make(chan struct{})
-	<-forever
-
-	return nil
 }
