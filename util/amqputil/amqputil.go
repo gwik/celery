@@ -6,6 +6,7 @@ See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 package amqputil
 
 import (
+	"errors"
 	"log"
 	"net"
 	"time"
@@ -18,8 +19,8 @@ type Retry struct {
 	url     string
 	config  *amqp.Config
 	delay   time.Duration
+	closing chan chan error
 	getters chan chan *amqp.Channel
-	err     error
 }
 
 // NewRetry builds a new retry.
@@ -28,6 +29,7 @@ func NewRetry(url string, config *amqp.Config, delay time.Duration) *Retry {
 		url:     url,
 		config:  config,
 		delay:   delay,
+		closing: make(chan chan error),
 		getters: make(chan chan *amqp.Channel, 1024),
 	}
 
@@ -42,17 +44,39 @@ func (ar *Retry) connect() (*amqp.Connection, error) {
 		var err error
 		log.Printf("connecting to %s", ar.url)
 
-		if ar.config == nil {
-			conn, err = amqp.Dial(ar.url)
-		} else {
-			conn, err = amqp.DialConfig(ar.url, *ar.config)
+		done := make(chan struct{}, 1)
+		go func() {
+			if ar.config == nil {
+				conn, err = amqp.Dial(ar.url)
+			} else {
+				conn, err = amqp.DialConfig(ar.url, *ar.config)
+			}
+			done <- struct{}{}
+		}()
+
+		select {
+		case errC := <-ar.closing:
+			errC <- nil
+			go func() {
+				<-done
+				if err != nil {
+					conn.Close()
+				}
+			}()
+			return nil, errors.New("closed while connecting.")
+		case <-done:
 		}
 
 		if err != nil {
 			if e, ok := err.(net.Error); ok && e.Temporary() {
-				log.Printf("could not connect to %s will retry after %v: %v", ar.url, ar.delay, err)
-				<-time.After(ar.delay)
-				continue
+				log.Printf("could not connect to %s will retry after %v: %v\n", ar.url, ar.delay, err)
+				select {
+				case errC := <-ar.closing:
+					errC <- err
+					return nil, err
+				case <-time.After(ar.delay):
+					continue
+				}
 			}
 			return nil, err
 		}
@@ -61,15 +85,11 @@ func (ar *Retry) connect() (*amqp.Connection, error) {
 	}
 }
 
-// Err return the non-temporary failure.
-func (ar *Retry) Err() error {
-	return ar.err
-}
-
 // Close closes the AMQP connections and stops the retry.
 func (ar *Retry) Close() error {
-	close(ar.getters)
-	return ar.err
+	errC := make(chan error)
+	ar.closing <- errC
+	return <-errC
 }
 
 func (ar *Retry) loop() {
@@ -78,28 +98,38 @@ func (ar *Retry) loop() {
 		conn, err := ar.connect()
 		if err != nil {
 			log.Printf("amqp connection error, will terminate: %v", err)
-			ar.err = err
 			for {
-				getter, ok := <-ar.getters
-				if !ok {
+				select {
+				case errC := <-ar.closing:
+					errC <- err
 					return
+				case getter := <-ar.getters:
+					close(getter)
 				}
-				close(getter)
 			}
-			return
 		}
 
-		for {
-			getter, ok := <-ar.getters
-			if !ok {
-				conn.Close()
+		var out chan *amqp.Channel
+		var ach *amqp.Channel
+		more := true
+
+		for more {
+			select {
+			case errC := <-ar.closing:
+				errC <- conn.Close()
 				return
-			}
-			ch, err := conn.Channel()
-			if err == nil {
-				getter <- ch
-				close(getter)
-				break
+			case out <- ach:
+				close(out)
+				out = nil
+				ach = nil
+			case getter := <-ar.getters:
+				ch, err := conn.Channel()
+				if err == nil {
+					ach = ch
+					out = getter
+					break
+				}
+				more = false
 			}
 		}
 	}

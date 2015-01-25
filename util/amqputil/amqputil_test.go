@@ -1,52 +1,59 @@
 package amqputil
 
 import (
+	"net"
 	"testing"
 	"time"
+
+	"github.com/streadway/amqp"
 )
 
 func TestAMQPRetry_exitOnConfigError(t *testing.T) {
 
-	retrier := NewAMQPRetry("thisiswrong", nil, 2*time.Second)
-
+	retrier := NewRetry("thisiswrong", nil, 2*time.Second)
 	chch := retrier.Channel()
+	defer func() {
+		err := retrier.Close()
+		if err == nil {
+			t.Fatal("Err should be set.")
+		}
+	}()
 
 	_, ok := <-chch
 	if ok {
 		t.Fatal("Should not be ok connection should have failed.")
 	}
 
-	err := retrier.Err()
-	if err == nil {
-		t.Fatal("Err should be set.")
-	}
+}
 
-	err = retrier.Close()
-	if err == nil {
-		t.Fatal("Err should be set.")
-	}
+type fakeErr struct {
+}
 
+func (fakeErr) Temporary() bool {
+	return true
+}
+
+func (fakeErr) Error() string {
+	return "fake temporary error."
+}
+
+func (fakeErr) Timeout() bool {
+	return false
 }
 
 func TestAMQPRetry_continueOnTemporaryError(t *testing.T) {
-
-	retrier := NewAMQPRetry("amqp://127.0.13.2:64987//", nil, time.Duration(0))
-	defer func() {
-		err := retrier.Close()
-		if err != nil {
-			t.Errorf("err should be nil was %v", err)
-		}
-	}()
-
+	config := &amqp.Config{
+		Dial: func(string, string) (net.Conn, error) {
+			return nil, fakeErr{}
+		},
+	}
+	retrier := NewRetry("amqp://127.0.13.2:64987//", config, time.Duration(2*time.Second))
+	defer retrier.Close()
+	<-time.After(1 * time.Millisecond)
 	chch := retrier.Channel()
-
 	select {
 	case <-chch:
 		t.Fatal("Should wait connection.")
 	default:
-	}
-
-	if retrier.Err() != nil {
-		t.Fatal("No error should be set")
 	}
 }

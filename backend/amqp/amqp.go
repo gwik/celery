@@ -3,7 +3,7 @@ Copyright (c) 2014-2015 Antonin Amand <antonin.amand@gmail.com>, All rights rese
 See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 */
 
-package celery
+package amqp
 
 import (
 	"encoding/json"

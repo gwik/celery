@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2014 Antonin Amand <antonin.amand@gmail.com>, All rights reserved.
+Copyright (c) 2014-2015 Antonin Amand <antonin.amand@gmail.com>, All rights reserved.
 See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 */
 
@@ -36,11 +36,11 @@ type Worker struct {
 type key int
 
 const (
-	keyTask key = 0
+	taskKey  = key(0)
+	retryKey = key(1)
 )
 
 func NewWorker(concurrency int, sub types.Subscriber, backend types.Backend, retry *Scheduler) *Worker {
-	// XXX: FIXME scheduler should be exported or interface.
 	return &Worker{
 		handlerReg: make(map[string]types.HandleFunc),
 		sub:        sub.Subscribe(),
@@ -52,12 +52,7 @@ func NewWorker(concurrency int, sub types.Subscriber, backend types.Backend, ret
 	}
 }
 
-func (w *Worker) Results() <-chan *types.Result {
-	return w.results
-}
-
 func (w *Worker) RegisterFunc(name string, fn interface{}) {
-
 	vfn := reflect.ValueOf(fn)
 	if vfn.Kind() != reflect.Func {
 		panic(fmt.Sprintf("%v is not a func", fn))
@@ -65,29 +60,26 @@ func (w *Worker) RegisterFunc(name string, fn interface{}) {
 
 	fmt.Printf("%v %s", fn, name)
 
-	var wrapper types.HandleFunc = func(ctx context.Context, args []interface{}, _ map[string]interface{}) (interface{}, error) {
+	var wrapper = func(ctx context.Context, args []interface{}, _ map[string]interface{}) (interface{}, error) {
 		in := make([]reflect.Value, len(args)+1)
 		in[0] = reflect.ValueOf(ctx)
 		for i, arg := range args {
 			in[i+1] = reflect.ValueOf(arg)
 		}
 
-		var result interface{}
-		var err error
-
 		res := vfn.Call(in)
 
+		var result interface{}
+		var err error
 		if res[0].IsValid() {
 			result = res[1].Interface()
 		}
-
 		if res[1].IsValid() {
 			errInf := res[1].Interface()
 			if errInf != nil {
 				err = errInf.(error)
 			}
 		}
-
 		return result, err
 	}
 
@@ -105,11 +97,6 @@ func (w *Worker) Start() {
 	go w.loop()
 }
 
-const (
-	taskKey  = key(0)
-	retryKey = key(1)
-)
-
 func retries(ctx context.Context) int {
 	val := ctx.Value(retryKey)
 	if val != nil {
@@ -123,12 +110,12 @@ func retry(ctx context.Context) context.Context {
 }
 
 func MsgFromContext(ctx context.Context) types.Message {
-	msg := ctx.Value(keyTask).(types.Task).Msg()
+	msg := ctx.Value(taskKey).(types.Task).Msg()
 	msg.Retries = retries(ctx)
 	return msg
 }
 
-func setJobContext(parent context.Context, t types.Task) context.Context {
+func makeJobContext(parent context.Context, t types.Task) context.Context {
 	ctx := context.WithValue(parent, taskKey, t)
 	ctx = context.WithValue(ctx, retryKey, retries(ctx))
 	return ctx
@@ -138,7 +125,8 @@ func (w *Worker) loop() {
 	go func() {
 		for {
 			<-time.After(time.Second * 1)
-			log.Printf("%d jobs completed, %d running", atomic.LoadUint64(&w.completed), atomic.LoadUint32(&w.running))
+			log.Printf("%d jobs completed, %d running",
+				atomic.LoadUint64(&w.completed), atomic.LoadUint32(&w.running))
 		}
 	}()
 
@@ -146,67 +134,64 @@ func (w *Worker) loop() {
 		select {
 		case t, ok := <-w.sub:
 			if !ok {
-				continue
+				return
 			}
-
 			task, ctx := t.T, t.C
 			msg := task.Msg()
-
 			log.Printf("Dispatch %s", msg.Task)
 			h, exists := w.handlerReg[msg.Task]
 
 			if !exists {
 				log.Printf("No handler for task: %s", msg.Task)
 				task.Reject(true)
-			} else {
+				continue
+			}
 
-				w.gate.Start()
-				atomic.AddUint32(&w.running, 1)
-				jobCtx := setJobContext(ctx, task)
-				// jobCtx, cancel := context.WithCancel(jobCtx)
+			w.gate.Start()
+			atomic.AddUint32(&w.running, 1)
+			jobCtx := makeJobContext(ctx, task)
+			// jobCtx, cancel := context.WithCancel(jobCtx)
 
-				go func() {
+			go func() {
+				defer atomic.AddUint32(&w.running, ^uint32(0)) // -1
+				defer w.gate.Done()
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("%s: %s", r, debug.Stack())
+					}
+					task.Reject(false)
+				}()
+				v, err := h(jobCtx, msg.Args, msg.KwArgs) // send function return through result
 
-					defer atomic.AddUint32(&w.running, ^uint32(0)) // -1
-					defer w.gate.Done()
-					defer func() {
-						if r := recover(); r != nil {
-							log.Printf("%s: %s", r, debug.Stack())
-						}
-						task.Reject(false)
-					}()
-					v, err := h(jobCtx, msg.Args, msg.KwArgs) // send function return through result
-
-					if err != nil {
-
-						if retryErr, ok := err.(Retryable); ok {
-							log.Printf("retry %s %v", msg.ID, retryErr.At())
-							c := retry(ctx)
-							w.retry.Publish(retryErr.At(), types.TaskContext{T: task, C: c})
+				if err != nil {
+					if retryErr, ok := err.(Retryable); ok {
+						if w.retry == nil {
+							log.Printf("no scheduler, won't retry %s/%s", msg.Task, msg.ID)
 							return
 						}
-
-						log.Printf("job %s/%s failed: %v", msg.Task, msg.ID, err)
-						task.Reject(false)
+						log.Printf("retry %s %v", msg.ID, retryErr.At())
+						c := retry(ctx)
+						w.retry.Publish(retryErr.At(), types.TaskContext{T: task, C: c})
 						return
 					}
+					log.Printf("job %s/%s failed: %v", msg.Task, msg.ID, err)
+					task.Reject(false)
+					return
+				}
 
-					task.Ack()
-					log.Printf("job %s/%s succeeded result: %v", msg.Task, msg.ID, v)
+				task.Ack()
+				log.Printf("job %s/%s succeeded result: %v", msg.Task, msg.ID, v)
+				w.backend.Publish(task, &types.ResultMeta{
+					Status: types.SUCCESS,
+					Result: v,
+					TaskId: msg.ID,
+				})
+				atomic.AddUint64(&w.completed, 1)
+			}()
 
-					w.backend.Publish(task, &types.ResultMeta{
-						Status: types.SUCCESS,
-						Result: v,
-						TaskId: msg.ID,
-					})
-					atomic.AddUint64(&w.completed, 1)
-					//w.results <- types.NewResult(j.task)
-				}()
-			}
-		case <-w.quit:
+		case <-w.quit: // TODO quit
 			return
 		}
-		// TODO quit
 	}
 }
 

@@ -2,11 +2,20 @@ package main
 
 import (
 	"log"
+	"net/http"
+	"os"
 	"time"
 
-	"github.com/gwik/celery"
-	"github.com/gwik/celery/types"
+	_ "net/http/pprof"
+
 	"golang.org/x/net/context"
+
+	_ "github.com/gwik/celery/message/json"
+
+	"github.com/gwik/celery"
+	"github.com/gwik/celery/consumer/amqpconsumer"
+	"github.com/gwik/celery/types"
+	"github.com/gwik/celery/util/amqputil"
 )
 
 func two(context context.Context, args []interface{}, kwargs map[string]interface{}) (interface{}, error) {
@@ -46,7 +55,16 @@ func (noopBackend) Publish(types.Task, *types.ResultMeta) {}
 
 func Consume(queueName string) error {
 
-	sched := celery.NewScheduler(celery.AMQPSubscriber("celery"))
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+
+	retry := amqputil.NewRetry(os.Getenv("AMQP_URL"), nil, 2*time.Second)
+
+	config := amqpconsumer.DefaultConfig()
+	config.QDurable = true
+
+	sched := celery.NewScheduler(amqpconsumer.NewAMQPSubscriber("celery", &config, retry))
 
 	// backend := NewAMQPBackend()
 	worker := celery.NewWorker(10, sched, noopBackend{}, sched)

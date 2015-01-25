@@ -2,8 +2,11 @@
 
 
 from celery import Celery
+from kombu import Exchange
 
 app = Celery('tasks', broker='amqp://guest@localhost//')
+
+media_exchange = Exchange('notifications', type='direct')
 
 app.conf.update(
     BROKER_URL = 'amqp://guest:guest@localhost:5672//',
@@ -13,7 +16,7 @@ app.conf.update(
 )
 
 import pprint
-pprint.pprint(app.conf)
+pprint.pprint(app.conf.keys())
 
 
 @app.task()
@@ -44,6 +47,15 @@ def byname(foo, bar):
 @app.task()
 def panic(msg):
     pass
+
+@app.task(ignore_result=True)
+def notify_user(userid, data):
+    pass
+
+
+def notify(userid, data):
+    notify(args=[data], queue=user_id, exchange="notifications")
+
 
 
 if __name__ == "__main__":
@@ -79,9 +91,11 @@ if __name__ == "__main__":
     def name():
         byname.delay("foo", 10)
         panic.delay("panic")
+        panic.delay("panic", "wrong number of arguments")
 
     # ex_result()
-    # ex1()
+    ex1()
     # retry()
-    name()
+    # for i in range(1000):
+    #     notify(i)
 

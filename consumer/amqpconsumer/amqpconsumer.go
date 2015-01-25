@@ -156,24 +156,27 @@ func (c *amqpConsumer) loop() {
 	var ch *amqp.Channel
 	var tc types.TaskContext
 	var out chan types.TaskContext
-	var in, msgs <-chan amqp.Delivery
+	var msgs <-chan amqp.Delivery
 	var ok bool
 
 	chch := c.retry.Channel()
-
 	ctx, abort := context.WithCancel(context.Background())
 
+	defer close(c.out)
 	defer func() {
 		if ch != nil {
 			ch.Close()
 		}
 	}()
-	defer close(c.out)
 
 	for {
-		select {
+		select { // carefull, order matters
+		case <-c.quit: // quit
+			abort()
+			return
 		case ch, ok = <-chch: // wait for an AMQP channel
 			if !ok {
+				log.Println("terminated amqp consumer.")
 				return
 			}
 			var err error
@@ -185,12 +188,13 @@ func (c *amqpConsumer) loop() {
 				chch = c.retry.Channel()
 				continue
 			}
+			ctx, abort = context.WithCancel(context.Background())
 			chch = nil
-			in = msgs
-		case d, ok := <-in: // wait for AMQP deliveries
+		case out <- tc: // send task downstream.
+			out = nil
+		case d, ok := <-msgs: // wait for AMQP deliveries
 			if !ok {
 				chch = c.retry.Channel()
-				in = nil
 				abort()
 				continue
 			}
@@ -204,13 +208,6 @@ func (c *amqpConsumer) loop() {
 			mctx := types.ContextFromMessage(ctx, msg)
 			tc = types.TaskContext{T: &amqpTask{&msg, ch, d.DeliveryTag}, C: mctx}
 			out = c.out
-			in = nil
-		case out <- tc: // send new task downstream.
-			out = nil
-			in = msgs
-		case <-c.quit: // quit
-			abort()
-			return
 		}
 	}
 
