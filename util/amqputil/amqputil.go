@@ -13,8 +13,8 @@ import (
 	"github.com/streadway/amqp"
 )
 
-// AMQPRetry retry connecting on failures.
-type AMQPRetry struct {
+// Retry connects to amqp and retry on temporary network failures.
+type Retry struct {
 	url     string
 	config  *amqp.Config
 	delay   time.Duration
@@ -22,8 +22,9 @@ type AMQPRetry struct {
 	err     error
 }
 
-func NewAMQPRetry(url string, config *amqp.Config, delay time.Duration) *AMQPRetry {
-	ar := &AMQPRetry{
+// NewRetry builds a new retry.
+func NewRetry(url string, config *amqp.Config, delay time.Duration) *Retry {
+	ar := &Retry{
 		url:     url,
 		config:  config,
 		delay:   delay,
@@ -35,7 +36,7 @@ func NewAMQPRetry(url string, config *amqp.Config, delay time.Duration) *AMQPRet
 	return ar
 }
 
-func (ar *AMQPRetry) connect() (*amqp.Connection, error) {
+func (ar *Retry) connect() (*amqp.Connection, error) {
 	for {
 		var conn *amqp.Connection
 		var err error
@@ -60,16 +61,18 @@ func (ar *AMQPRetry) connect() (*amqp.Connection, error) {
 	}
 }
 
-func (ar *AMQPRetry) Err() error {
+// Err return the non-temporary failure.
+func (ar *Retry) Err() error {
 	return ar.err
 }
 
-func (ar *AMQPRetry) Close() error {
+// Close closes the AMQP connections and stops the retry.
+func (ar *Retry) Close() error {
 	close(ar.getters)
 	return ar.err
 }
 
-func (ar *AMQPRetry) loop() {
+func (ar *Retry) loop() {
 
 	for {
 		conn, err := ar.connect()
@@ -89,6 +92,7 @@ func (ar *AMQPRetry) loop() {
 		for {
 			getter, ok := <-ar.getters
 			if !ok {
+				conn.Close()
 				return
 			}
 			ch, err := conn.Channel()
@@ -102,7 +106,11 @@ func (ar *AMQPRetry) loop() {
 
 }
 
-func (ar *AMQPRetry) Channel() <-chan *amqp.Channel {
+// Channel returns a chan of AMQP Channels. When the AMQP connection is
+// ready it will be sent an AMQP Channel and will be closed.
+// if the chan is closed before sending a channel it means an error
+// occured and the receiver must not call the method again.
+func (ar *Retry) Channel() <-chan *amqp.Channel {
 	// getter is buffered to avoid blocking
 	// if reveiver is not listening it won't leak
 	// and it won't wait forever, preveting others
