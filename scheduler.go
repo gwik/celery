@@ -97,9 +97,15 @@ func (s *Scheduler) loop() {
 		if out == nil {
 			top := s.t.Top()
 			if top != empty {
-				delay := top.eta.Sub(time.Now())
-				timer = time.After(delay)
-				log.Printf("next pop in %s", delay)
+				now := time.Now()
+				delay := top.eta.Sub(now)
+				if delay < 0 {
+					next = heap.Pop(s.t).(item).tc
+					out = s.pub
+				} else {
+					timer = time.After(delay)
+					// log.Printf("next pop in %s", delay)
+				}
 			} else {
 				timer = nil
 				log.Println("wait for tasks...")
@@ -108,7 +114,7 @@ func (s *Scheduler) loop() {
 
 		select { // carefull the order matters
 		case <-s.quit:
-			log.Println("close sched.")
+			log.Println("close scheduler.")
 			return
 		case out <- next:
 			out = nil

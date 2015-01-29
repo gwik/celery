@@ -39,7 +39,7 @@ type Config struct {
 }
 
 var defaultConfig = &Config{
-	QDurable:    false,
+	QDurable:    true,
 	QAutoDelete: false,
 	QExclusive:  false,
 	QNoWait:     false,

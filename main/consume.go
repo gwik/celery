@@ -19,7 +19,7 @@ import (
 )
 
 func two(context context.Context, args []interface{}, kwargs map[string]interface{}) (interface{}, error) {
-	<-time.After(time.Second * 10)
+	<-time.After(time.Millisecond * time.Duration(10))
 	return nil, nil
 }
 
@@ -64,10 +64,10 @@ func Consume(queueName string) error {
 	config := amqpconsumer.DefaultConfig()
 	config.QDurable = true
 
-	sched := celery.NewScheduler(amqpconsumer.NewAMQPSubscriber("celery", &config, retry))
+	sched := celery.NewScheduler(amqpconsumer.NewAMQPSubscriber(queueName, &config, retry))
 
 	// backend := NewAMQPBackend()
-	worker := celery.NewWorker(10, sched, noopBackend{}, sched)
+	worker := celery.NewWorker(100, sched, noopBackend{}, sched)
 
 	worker.Register("tasks.add", add)
 	worker.Register("tasks.two", two)

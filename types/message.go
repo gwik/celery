@@ -43,7 +43,7 @@ func DecodeMessage(contentType string, p []byte) (Message, error) {
 }
 
 func ContextFromMessage(parent context.Context, msg Message) context.Context {
-	if msg.Expires.IsZero() {
+	if !msg.Expires.IsZero() {
 		ctx, _ := context.WithDeadline(parent, msg.Expires)
 		return ctx
 	}

@@ -1,6 +1,7 @@
 #! /usr/bin/env python
 
 
+from kombu import Exchange, Queue
 from celery import Celery
 from kombu import Exchange
 
@@ -13,6 +14,8 @@ app.conf.update(
     CELERY_TASK_SERIALIZER='json',
     CELERY_RESULT_SERIALIZER='json',
     CELERY_RESULT_BACKEND= 'amqp://guest:guest@localhost:5672//',
+    CELERY_QUEUES = (
+        Queue('celery', routing_key='celery', delivery_mode=1),),
 )
 
 import pprint
@@ -60,9 +63,11 @@ def notify(userid, data):
 
 if __name__ == "__main__":
 
+
+
     def ex1():
-        for i in xrange(200):
-            unknown.delay()
+        # for i in xrange(200):
+        #     unknown.delay()
 
         two.apply_async(args=["LAST"], countdown=10)
         two.apply_async(args=["LATER"], countdown=2)
@@ -70,8 +75,9 @@ if __name__ == "__main__":
         for i in xrange(10):
             two.apply_async(args=["BULK"], countdown=10)
 
-        add.delay(2, 3)
-        two.delay(2)
+        for i in xrange(10000):
+            add.delay(2, 3)
+            two.delay(2)
 
         unknown.delay()
 
@@ -98,4 +104,8 @@ if __name__ == "__main__":
     # retry()
     # for i in range(1000):
     #     notify(i)
+
+    # add.delay(2, 3)
+
+
 

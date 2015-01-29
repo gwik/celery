@@ -139,60 +139,78 @@ func (w *Worker) loop() {
 			task, ctx := t.T, t.C
 			msg := task.Msg()
 			log.Printf("Dispatch %s", msg.Task)
-			h, exists := w.handlerReg[msg.Task]
 
+			select {
+			case <-ctx.Done():
+				log.Printf("done: %s do nothing.", msg.ID)
+				continue
+			default:
+			}
+
+			h, exists := w.handlerReg[msg.Task]
 			if !exists {
 				log.Printf("No handler for task: %s", msg.Task)
-				task.Reject(true)
+				task.Reject(false)
 				continue
 			}
 
 			w.gate.Start()
 			atomic.AddUint32(&w.running, 1)
-			jobCtx := makeJobContext(ctx, task)
-			// jobCtx, cancel := context.WithCancel(jobCtx)
 
-			go func() {
-				defer atomic.AddUint32(&w.running, ^uint32(0)) // -1
-				defer w.gate.Done()
-				defer func() {
-					if r := recover(); r != nil {
-						log.Printf("%s: %s", r, debug.Stack())
-					}
-					task.Reject(false)
-				}()
-				v, err := h(jobCtx, msg.Args, msg.KwArgs) // send function return through result
-
-				if err != nil {
-					if retryErr, ok := err.(Retryable); ok {
-						if w.retry == nil {
-							log.Printf("no scheduler, won't retry %s/%s", msg.Task, msg.ID)
-							return
-						}
-						log.Printf("retry %s %v", msg.ID, retryErr.At())
-						c := retry(ctx)
-						w.retry.Publish(retryErr.At(), types.TaskContext{T: task, C: c})
-						return
-					}
-					log.Printf("job %s/%s failed: %v", msg.Task, msg.ID, err)
-					task.Reject(false)
-					return
-				}
-
-				task.Ack()
-				log.Printf("job %s/%s succeeded result: %v", msg.Task, msg.ID, v)
-				w.backend.Publish(task, &types.ResultMeta{
-					Status: types.SUCCESS,
-					Result: v,
-					TaskId: msg.ID,
-				})
-				atomic.AddUint64(&w.completed, 1)
-			}()
+			go w.run(task, ctx, h)
 
 		case <-w.quit: // TODO quit
 			return
 		}
 	}
+}
+
+func (w *Worker) run(task types.Task, context context.Context, h types.HandleFunc) {
+	defer atomic.AddUint32(&w.running, ^uint32(0)) // -1
+	defer w.gate.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("%s: %s", r, debug.Stack())
+			task.Reject(false)
+		}
+	}()
+
+	jobCtx := makeJobContext(context, task)
+	// jobCtx, cancel := context.WithCancel(jobCtx) // cancel if worker is closed.
+	msg := task.Msg()
+	v, err := h(jobCtx, msg.Args, msg.KwArgs) // send function return through result
+
+	select {
+	case <-jobCtx.Done():
+		log.Printf("after, done: %s do nothing.", msg.ID)
+		return
+	default:
+	}
+
+	if err != nil {
+		if retryErr, ok := err.(Retryable); ok {
+			if w.retry == nil {
+				log.Printf("no scheduler, won't retry %s/%s", msg.Task, msg.ID)
+				return
+			}
+			log.Printf("retry %s %v", msg.ID, retryErr.At())
+			c := retry(context)
+			w.retry.Publish(retryErr.At(), types.TaskContext{T: task, C: c})
+			return
+		}
+		log.Printf("job %s/%s failed: %v", msg.Task, msg.ID, err)
+		task.Reject(false)
+		return
+	}
+
+	task.Ack()
+	log.Printf("job %s/%s succeeded result: %v", msg.Task, msg.ID, v)
+	w.backend.Publish(task, &types.ResultMeta{
+		Status: types.SUCCESS,
+		Result: v,
+		TaskId: msg.ID,
+	})
+	atomic.AddUint64(&w.completed, 1)
 }
 
 type Retryable interface {
