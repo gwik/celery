@@ -9,7 +9,6 @@ import (
 )
 
 func TestAMQPRetry_exitOnConfigError(t *testing.T) {
-
 	retrier := NewRetry("thisiswrong", nil, 2*time.Second)
 	chch := retrier.Channel()
 	defer func() {
@@ -41,7 +40,7 @@ func (fakeErr) Timeout() bool {
 	return false
 }
 
-func TestAMQPRetry_continueOnTemporaryError(t *testing.T) {
+func TestAMQPRetry_continueOnNetError(t *testing.T) {
 	config := &amqp.Config{
 		Dial: func(string, string) (net.Conn, error) {
 			return nil, fakeErr{}

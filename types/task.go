@@ -10,19 +10,14 @@ import (
 )
 
 type Task interface {
+	context.Context
 	Msg() Message
 	Ack() error
 	Reject(requeue bool) error
 }
 
-// Task bundled with a context. used to pass through channels.
-type TaskContext struct {
-	C context.Context
-	T Task
-}
-
 type Subscriber interface {
-	Subscribe() <-chan TaskContext
+	Subscribe() <-chan Task
 	Close() error
 }
 

@@ -15,7 +15,7 @@ import (
 
 type item struct {
 	eta time.Time
-	tc  types.TaskContext
+	t   types.Task
 }
 
 var empty item = item{}
@@ -53,8 +53,8 @@ func (t table) Top() item {
 
 type Scheduler struct {
 	t        *table
-	sub      <-chan types.TaskContext
-	pub      chan types.TaskContext
+	sub      <-chan types.Task
+	pub      chan types.Task
 	backdoor chan item
 	quit     chan struct{}
 }
@@ -66,7 +66,7 @@ func NewScheduler(sub types.Subscriber) *Scheduler {
 	sched := &Scheduler{
 		t:        &t,
 		sub:      sub.Subscribe(),
-		pub:      make(chan types.TaskContext),
+		pub:      make(chan types.Task),
 		backdoor: make(chan item),
 		quit:     make(chan struct{}),
 	}
@@ -75,59 +75,75 @@ func NewScheduler(sub types.Subscriber) *Scheduler {
 	return sched
 }
 
-func (s *Scheduler) Publish(eta time.Time, t types.TaskContext) {
+func (s *Scheduler) Publish(eta time.Time, t types.Task) {
 	s.backdoor <- item{eta, t}
 }
 
-func (s *Scheduler) Subscribe() <-chan types.TaskContext {
+func (s *Scheduler) Subscribe() <-chan types.Task {
 	return s.pub
+}
+
+func (s *Scheduler) schedule(eta time.Time, t types.Task) time.Duration {
+	delta := eta.Sub(time.Now())
+	if delta > 0 {
+		heap.Push(s.t, item{eta, t})
+	}
+	return delta
+}
+
+func (s *Scheduler) scheduleTask(t types.Task) time.Duration {
+	return s.schedule(t.Msg().ETA, t)
 }
 
 func (s *Scheduler) loop() {
 	var timer <-chan time.Time
-	var next types.TaskContext
-	var out chan<- types.TaskContext
+	var t types.Task
+	var out chan<- types.Task
 
 	defer func() {
-		log.Println("close sched.")
+		log.Println("Close scheduler.")
 		close(s.pub)
 	}()
 
 	for {
+		timer = nil
 		if out == nil {
 			top := s.t.Top()
 			if top != empty {
-				now := time.Now()
-				delay := top.eta.Sub(now)
+				delay := top.eta.Sub(time.Now())
 				if delay < 0 {
-					next = heap.Pop(s.t).(item).tc
+					t = heap.Pop(s.t).(item).t
 					out = s.pub
 				} else {
 					timer = time.After(delay)
-					// log.Printf("next pop in %s", delay)
+					log.Printf("next pop in %s", delay)
 				}
-			} else {
-				timer = nil
-				log.Println("wait for tasks...")
 			}
 		}
 
 		select { // carefull the order matters
 		case <-s.quit:
-			log.Println("close scheduler.")
 			return
-		case out <- next:
+		case out <- t:
 			out = nil
 		case <-timer:
-			next = heap.Pop(s.t).(item).tc
+			t = heap.Pop(s.t).(item).t
 			out = s.pub
-		case it := <-s.backdoor:
-			heap.Push(s.t, it)
-		case tc, ok := <-s.sub:
-			if ok {
-				heap.Push(s.t, item{tc.T.Msg().ETA, tc})
-			} else {
+		case it, ok := <-s.backdoor:
+			if !ok {
 				return
+			}
+			if when := s.schedule(it.eta, it.t); when <= 0 {
+				out = s.pub
+				t = it.t
+			}
+		case it, ok := <-s.sub:
+			if !ok {
+				return
+			}
+			if when := s.scheduleTask(it); when <= 0 {
+				out = s.pub
+				t = it
 			}
 		}
 	}

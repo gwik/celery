@@ -16,6 +16,7 @@ import (
 )
 
 type amqpTask struct {
+	context.Context
 	msg *types.Message
 	ch  *amqp.Channel
 	tag uint64 // delivery tag
@@ -87,7 +88,7 @@ type amqpConsumer struct {
 	q      string
 	config *Config
 	retry  *amqputil.Retry
-	out    chan types.TaskContext
+	out    chan types.Task
 	quit   chan struct{}
 }
 
@@ -104,7 +105,7 @@ func NewAMQPSubscriber(queue string, config *Config, retry *amqputil.Retry) *amq
 		q:      queue,
 		config: config,
 		retry:  retry,
-		out:    make(chan types.TaskContext),
+		out:    make(chan types.Task),
 		quit:   make(chan struct{}),
 	}
 	go c.loop()
@@ -112,7 +113,7 @@ func NewAMQPSubscriber(queue string, config *Config, retry *amqputil.Retry) *amq
 }
 
 // Subscribe implements the Subscriber interface.
-func (c *amqpConsumer) Subscribe() <-chan types.TaskContext {
+func (c *amqpConsumer) Subscribe() <-chan types.Task {
 	return c.out
 }
 
@@ -154,8 +155,8 @@ func (c *amqpConsumer) declare(ch *amqp.Channel) (<-chan amqp.Delivery, error) {
 func (c *amqpConsumer) loop() {
 
 	var ch *amqp.Channel
-	var tc types.TaskContext
-	var out chan types.TaskContext
+	var task types.Task
+	var out chan types.Task
 	var msgs <-chan amqp.Delivery
 	var ok bool
 
@@ -176,7 +177,7 @@ func (c *amqpConsumer) loop() {
 			return
 		case ch, ok = <-chch: // wait for an AMQP channel
 			if !ok {
-				log.Println("terminated amqp consumer.")
+				log.Println("Terminated amqp consumer.")
 				return
 			}
 			var err error
@@ -188,14 +189,18 @@ func (c *amqpConsumer) loop() {
 				chch = c.retry.Channel()
 				continue
 			}
+			log.Println("New channel.")
 			ctx, abort = context.WithCancel(context.Background())
 			chch = nil
-		case out <- tc: // send task downstream.
+		case out <- task: // send task downstream.
 			out = nil
 		case d, ok := <-msgs: // wait for AMQP deliveries
 			if !ok {
-				chch = c.retry.Channel()
+				log.Println("Closed messages")
 				abort()
+				msgs = nil
+				out = nil
+				chch = c.retry.Channel()
 				continue
 			}
 			// log.Printf("%s %s", d.Body, d.ReplyTo)
@@ -206,7 +211,7 @@ func (c *amqpConsumer) loop() {
 				continue
 			}
 			mctx := types.ContextFromMessage(ctx, msg)
-			tc = types.TaskContext{T: &amqpTask{&msg, ch, d.DeliveryTag}, C: mctx}
+			task = &amqpTask{mctx, &msg, ch, d.DeliveryTag}
 			out = c.out
 		}
 	}

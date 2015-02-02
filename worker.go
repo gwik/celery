@@ -21,7 +21,7 @@ import (
 
 type Worker struct {
 	handlerReg map[string]types.HandleFunc
-	sub        <-chan types.TaskContext
+	sub        <-chan types.Task
 	gate       *syncutil.Gate
 	results    chan *types.Result
 	quit       chan struct{}
@@ -97,28 +97,71 @@ func (w *Worker) Start() {
 	go w.loop()
 }
 
-func retries(ctx context.Context) int {
-	val := ctx.Value(retryKey)
-	if val != nil {
-		return val.(int)
+type retryTask struct {
+	types.Task
+	retries int
+}
+
+func retries(t types.Task) int {
+	if rt, ok := t.(retryTask); ok {
+		return rt.retries
 	}
 	return 0
 }
 
-func retry(ctx context.Context) context.Context {
-	return context.WithValue(ctx, retryKey, retries(ctx)+1)
+func retry(t types.Task) types.Task {
+	if rt, ok := t.(retryTask); ok {
+		rt.retries += 1
+		return rt
+	}
+
+	return retryTask{t, 1}
 }
 
 func MsgFromContext(ctx context.Context) types.Message {
-	msg := ctx.Value(taskKey).(types.Task).Msg()
-	msg.Retries = retries(ctx)
+	task := ctx.Value(taskKey).(types.Task)
+	msg := task.Msg()
+	msg.Retries = retries(task)
 	return msg
 }
 
-func makeJobContext(parent context.Context, t types.Task) context.Context {
-	ctx := context.WithValue(parent, taskKey, t)
-	ctx = context.WithValue(ctx, retryKey, retries(ctx))
+func jobContext(t types.Task) context.Context {
+	ctx := context.WithValue(t, taskKey, t)
+	ctx = context.WithValue(ctx, retryKey, retries(t))
 	return ctx
+}
+
+type cancelProxy struct {
+	context.Context
+	quit   chan struct{}
+	cancel chan struct{}
+}
+
+// A context which is cancelled when cancel chan is closed or parent is done.
+func newCancelProxy(ctx context.Context, cancel <-chan struct{}) *cancelProxy {
+	cd := &cancelProxy{ctx, make(chan struct{}), make(chan struct{})}
+
+	go func() {
+		select {
+		case <-cd.Context.Done():
+			close(cd.cancel)
+			return
+		case <-cancel:
+			close(cd.cancel)
+			return
+		case <-cd.quit:
+			return
+		}
+	}()
+	return cd
+}
+
+func (cd *cancelProxy) Done() <-chan struct{} {
+	return cd.cancel
+}
+
+func (cd *cancelProxy) Close() {
+	close(cd.quit)
 }
 
 func (w *Worker) loop() {
@@ -132,16 +175,15 @@ func (w *Worker) loop() {
 
 	for {
 		select {
-		case t, ok := <-w.sub:
+		case task, ok := <-w.sub:
 			if !ok {
 				return
 			}
-			task, ctx := t.T, t.C
 			msg := task.Msg()
 			log.Printf("Dispatch %s", msg.Task)
 
 			select {
-			case <-ctx.Done():
+			case <-task.Done():
 				log.Printf("done: %s do nothing.", msg.ID)
 				continue
 			default:
@@ -157,7 +199,7 @@ func (w *Worker) loop() {
 			w.gate.Start()
 			atomic.AddUint32(&w.running, 1)
 
-			go w.run(task, ctx, h)
+			go w.run(task, h)
 
 		case <-w.quit: // TODO quit
 			return
@@ -165,7 +207,7 @@ func (w *Worker) loop() {
 	}
 }
 
-func (w *Worker) run(task types.Task, context context.Context, h types.HandleFunc) {
+func (w *Worker) run(task types.Task, h types.HandleFunc) {
 	defer atomic.AddUint32(&w.running, ^uint32(0)) // -1
 	defer w.gate.Done()
 	defer func() {
@@ -175,13 +217,14 @@ func (w *Worker) run(task types.Task, context context.Context, h types.HandleFun
 		}
 	}()
 
-	jobCtx := makeJobContext(context, task)
-	// jobCtx, cancel := context.WithCancel(jobCtx) // cancel if worker is closed.
+	ctx := newCancelProxy(jobContext(task), w.quit)
+	defer ctx.Close()
+
 	msg := task.Msg()
-	v, err := h(jobCtx, msg.Args, msg.KwArgs) // send function return through result
+	v, err := h(ctx, msg.Args, msg.KwArgs) // send function return through result
 
 	select {
-	case <-jobCtx.Done():
+	case <-ctx.Done():
 		log.Printf("after, done: %s do nothing.", msg.ID)
 		return
 	default:
@@ -194,8 +237,7 @@ func (w *Worker) run(task types.Task, context context.Context, h types.HandleFun
 				return
 			}
 			log.Printf("retry %s %v", msg.ID, retryErr.At())
-			c := retry(context)
-			w.retry.Publish(retryErr.At(), types.TaskContext{T: task, C: c})
+			w.retry.Publish(retryErr.At(), retry(task))
 			return
 		}
 		log.Printf("job %s/%s failed: %v", msg.Task, msg.ID, err)

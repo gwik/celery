@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -54,6 +55,10 @@ type noopBackend struct{}
 func (noopBackend) Publish(types.Task, *types.ResultMeta) {}
 
 func Consume(queueName string) error {
+
+	if os.Getenv("LOG_OFF") != "" {
+		log.SetOutput(ioutil.Discard)
+	}
 
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
