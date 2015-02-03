@@ -127,13 +127,11 @@ func (ar *Retry) loop() {
 				errC <- conn.Close()
 				return
 			case out <- ach:
-				log.Println("[DEBUG] AMQP Channel sent")
 				close(out)
 				out = nil
 				ach = nil
 				in = ar.requests
 			case c := <-in:
-				log.Println("[DEBUG] AMQP Channel request")
 				ch, err := conn.Channel()
 				if err == nil {
 					ach = ch
