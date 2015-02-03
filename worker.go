@@ -19,83 +19,12 @@ import (
 	"golang.org/x/net/context"
 )
 
-type Worker struct {
-	handlerReg map[string]types.HandleFunc
-	sub        <-chan types.Task
-	gate       *syncutil.Gate
-	results    chan *types.Result
-	quit       chan struct{}
-	backend    types.Backend
-	retry      *Scheduler
-
-	// stats
-	completed uint64
-	running   uint32
-}
-
 type key int
 
 const (
 	taskKey  = key(0)
 	retryKey = key(1)
 )
-
-func NewWorker(concurrency int, sub types.Subscriber, backend types.Backend, retry *Scheduler) *Worker {
-	return &Worker{
-		handlerReg: make(map[string]types.HandleFunc),
-		sub:        sub.Subscribe(),
-		gate:       syncutil.NewGate(concurrency),
-		results:    make(chan *types.Result),
-		quit:       make(chan struct{}),
-		backend:    backend,
-		retry:      retry,
-	}
-}
-
-func (w *Worker) RegisterFunc(name string, fn interface{}) {
-	vfn := reflect.ValueOf(fn)
-	if vfn.Kind() != reflect.Func {
-		panic(fmt.Sprintf("%v is not a func", fn))
-	}
-
-	fmt.Printf("%v %s", fn, name)
-
-	var wrapper = func(ctx context.Context, args []interface{}, _ map[string]interface{}) (interface{}, error) {
-		in := make([]reflect.Value, len(args)+1)
-		in[0] = reflect.ValueOf(ctx)
-		for i, arg := range args {
-			in[i+1] = reflect.ValueOf(arg)
-		}
-
-		res := vfn.Call(in)
-
-		var result interface{}
-		var err error
-		if res[0].IsValid() {
-			result = res[1].Interface()
-		}
-		if res[1].IsValid() {
-			errInf := res[1].Interface()
-			if errInf != nil {
-				err = errInf.(error)
-			}
-		}
-		return result, err
-	}
-
-	w.Register(name, wrapper)
-}
-
-func (w *Worker) Register(name string, h types.HandleFunc) {
-	if _, exists := w.handlerReg[name]; exists {
-		log.Fatalf("Already registered: %s.", name)
-	}
-	w.handlerReg[name] = h
-}
-
-func (w *Worker) Start() {
-	go w.loop()
-}
 
 type retryTask struct {
 	types.Task
@@ -164,6 +93,82 @@ func (cd *cancelProxy) Close() {
 	close(cd.quit)
 }
 
+type Worker struct {
+	handlerReg map[string]types.HandleFunc
+	sub        <-chan types.Task
+	gate       *syncutil.Gate
+	results    chan *types.Result
+	quit       chan struct{}
+	backend    types.Backend
+	retry      *Scheduler
+
+	// stats
+	completed uint64
+	running   uint32
+}
+
+func NewWorker(concurrency int, sub types.Subscriber, backend types.Backend, retry *Scheduler) *Worker {
+	return &Worker{
+		handlerReg: make(map[string]types.HandleFunc),
+		sub:        sub.Subscribe(),
+		gate:       syncutil.NewGate(concurrency),
+		results:    make(chan *types.Result),
+		quit:       make(chan struct{}),
+		backend:    backend,
+		retry:      retry,
+	}
+}
+
+func (w *Worker) RegisterFunc(name string, fn interface{}) {
+	vfn := reflect.ValueOf(fn)
+	if vfn.Kind() != reflect.Func {
+		panic(fmt.Sprintf("%v is not a func", fn))
+	}
+
+	fmt.Printf("%v %s", fn, name)
+
+	var wrapper = func(ctx context.Context, args []interface{}, _ map[string]interface{}) (interface{}, error) {
+		in := make([]reflect.Value, len(args)+1)
+		in[0] = reflect.ValueOf(ctx)
+		for i, arg := range args {
+			in[i+1] = reflect.ValueOf(arg)
+		}
+
+		res := vfn.Call(in)
+
+		var result interface{}
+		var err error
+		if res[0].IsValid() {
+			result = res[0].Interface()
+		}
+		if res[1].IsValid() {
+			errInf := res[1].Interface()
+			if errInf != nil {
+				err = errInf.(error)
+			}
+		}
+		return result, err
+	}
+
+	w.Register(name, wrapper)
+}
+
+func (w *Worker) Register(name string, h types.HandleFunc) {
+	if _, exists := w.handlerReg[name]; exists {
+		log.Fatalf("Already registered: %s.", name)
+	}
+	w.handlerReg[name] = h
+}
+
+func (w *Worker) Start() {
+	go w.loop()
+}
+
+func (w *Worker) Close() error {
+	close(w.quit)
+	return nil
+}
+
 func (w *Worker) loop() {
 	go func() {
 		for {
@@ -184,7 +189,7 @@ func (w *Worker) loop() {
 
 			select {
 			case <-task.Done():
-				log.Printf("done: %s do nothing.", msg.ID)
+				log.Printf("Canceled: %s", msg.ID)
 				continue
 			default:
 			}
@@ -201,7 +206,8 @@ func (w *Worker) loop() {
 
 			go w.run(task, h)
 
-		case <-w.quit: // TODO quit
+		case <-w.quit:
+
 			return
 		}
 	}
