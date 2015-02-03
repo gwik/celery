@@ -47,6 +47,8 @@ func retry(t types.Task) types.Task {
 	return retryTask{t, 1}
 }
 
+// MsgFromContext can be called within task function to get the
+// celery message from the context.
 func MsgFromContext(ctx context.Context) types.Message {
 	task := ctx.Value(taskKey).(types.Task)
 	msg := task.Msg()
@@ -93,6 +95,7 @@ func (cd *cancelProxy) Close() {
 	close(cd.quit)
 }
 
+// Worker runs tasks and publish their results.
 type Worker struct {
 	handlerReg map[string]types.HandleFunc
 	sub        <-chan types.Task
@@ -107,6 +110,16 @@ type Worker struct {
 	running   uint32
 }
 
+// NewWorker returns a new worker.
+//
+// concurrency is the number of concurrent goroutines that run tasks.
+//
+// sub is the subscriber from which the tasks are coming (usually a Scheduler)
+//
+// Results are published to backend.
+//
+// retry is a Scheduler used for tasks that are retried after some time (usually same as sub).
+// It can be nil, in which case the tasks are not retried.
 func NewWorker(concurrency int, sub types.Subscriber, backend types.Backend, retry *Scheduler) *Worker {
 	return &Worker{
 		handlerReg: make(map[string]types.HandleFunc),
@@ -119,6 +132,15 @@ func NewWorker(concurrency int, sub types.Subscriber, backend types.Backend, ret
 	}
 }
 
+// RegisterFunc registers a function that must have a golang.org/x/context.Context as first argument.
+// Other arguments will be passed from the message arguments.
+// The return must be (types.Result, error).
+//
+// 		w.RegisterFunc("tasks.add", func(ctx context.Context, a float64, b float64) (types.Result, error) {
+//			return a + b, nil
+// 		})
+//
+// It should be used before start.
 func (w *Worker) RegisterFunc(name string, fn interface{}) {
 	vfn := reflect.ValueOf(fn)
 	if vfn.Kind() != reflect.Func {
@@ -153,6 +175,8 @@ func (w *Worker) RegisterFunc(name string, fn interface{}) {
 	w.Register(name, wrapper)
 }
 
+// Register registers a HandleFunc function with the given name. It should be
+// used before Start.
 func (w *Worker) Register(name string, h types.HandleFunc) {
 	if _, exists := w.handlerReg[name]; exists {
 		log.Fatalf("Already registered: %s.", name)
@@ -160,10 +184,12 @@ func (w *Worker) Register(name string, h types.HandleFunc) {
 	w.handlerReg[name] = h
 }
 
+// Start starts the worker. It should be called after task registration is complete.
 func (w *Worker) Start() {
 	go w.loop()
 }
 
+// Close closes the worker, it stops processing new tasks.
 func (w *Worker) Close() error {
 	close(w.quit)
 	return nil
@@ -261,36 +287,37 @@ func (w *Worker) run(task types.Task, h types.HandleFunc) {
 	atomic.AddUint64(&w.completed, 1)
 }
 
+// Retryable is the interface for retryable errors.
 type Retryable interface {
-	At() time.Time
 	error
+	At() time.Time // the time at which the task should be retried.
 }
 
+// RetryError is a Retryable error implementation that wraps other errors.
 type RetryError struct {
-	err error
-	at  time.Time
+	error
+	at time.Time
 }
 
 var _ Retryable = (*RetryError)(nil)
 
-func (re *RetryError) Error() string {
-	return re.err.Error()
-}
-
+// At implements the Retryable interface. It is the time
 func (re *RetryError) At() time.Time {
 	return re.at
 }
 
-func Retry(err error, delay time.Duration) *RetryError {
+// Retry is a helper function to retry a task on error after delay.
+func Retry(err error, delay time.Duration) Retryable {
 	return &RetryError{
-		err: err,
-		at:  time.Now().Add(delay),
+		err,
+		time.Now().Add(delay),
 	}
 }
 
-func Again(reason string, delay time.Duration) *RetryError {
+// Again is a helper function to retry a task with a reason after a delay.
+func Again(reason string, delay time.Duration) Retryable {
 	return &RetryError{
-		err: errors.New(reason),
-		at:  time.Now().Add(delay),
+		errors.New(reason),
+		time.Now().Add(delay),
 	}
 }

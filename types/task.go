@@ -9,6 +9,7 @@ import (
 	"golang.org/x/net/context"
 )
 
+// Task is the interface for tasks.
 type Task interface {
 	context.Context
 	Msg() Message
@@ -16,9 +17,11 @@ type Task interface {
 	Reject(requeue bool) error
 }
 
+// Subscriber is the interface components that produces tasks.
 type Subscriber interface {
 	Subscribe() <-chan Task
 	Close() error
 }
 
+// HandleFunc is the type for function that run tasks and return their results.
 type HandleFunc func(context.Context, []interface{}, map[string]interface{}) (interface{}, error)

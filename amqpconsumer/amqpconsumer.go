@@ -94,9 +94,9 @@ type amqpConsumer struct {
 
 var _ types.Subscriber = (*amqpConsumer)(nil)
 
-// NewAMQPSubscriber Create a new AMQP Subscriber. config can be nil, in
-// that case it will be set with DefaultConfig.
-func NewAMQPSubscriber(queue string, config *Config, retry *amqputil.Retry) *amqpConsumer {
+// NewAMQPSubscriber creates a new AMQP Subscriber. config can be nil, in
+// which case it will be set with DefaultConfig.
+func NewAMQPSubscriber(queue string, config *Config, retry *amqputil.Retry) types.Subscriber {
 	if config == nil {
 		dcfg := DefaultConfig()
 		config = &dcfg

@@ -6,6 +6,7 @@ See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 package types
 
 const (
+	// Statuses
 	PENDING  = "PENDING"  // Task state is unknown (assumed pending since you know the id).
 	RECEIVED = "RECEIVED" // Task was received by a worker.
 	STARTED  = "STARTED"  // Task was started by a worker (:setting:`CELERY_TRACK_STARTED`).
@@ -25,8 +26,10 @@ type ResultMeta struct {
 	// Children  interface{} // Not implemented
 }
 
+// Result is the result type returned by tasks. The result encoder should be able to encode it.
 type Result interface{}
 
+// Backend is the interface for publishers of tasks results.
 type Backend interface {
 	Publish(Task, *ResultMeta)
 }

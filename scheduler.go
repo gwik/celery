@@ -51,6 +51,8 @@ func (t table) Top() item {
 	return t[0]
 }
 
+// Scheduler pull tasks from a subscriber and publish them when
+// their ETA is reached.
 type Scheduler struct {
 	t        *table
 	sub      <-chan types.Task
@@ -59,6 +61,7 @@ type Scheduler struct {
 	quit     chan struct{}
 }
 
+// NewScheduler returns a new scheduler pulling tasks from sub.
 func NewScheduler(sub types.Subscriber) *Scheduler {
 	t := make(table, 0, 32)
 	heap.Init(&t)
@@ -75,10 +78,12 @@ func NewScheduler(sub types.Subscriber) *Scheduler {
 	return sched
 }
 
+// Publish publishes a task at the given ETA.
 func (s *Scheduler) Publish(eta time.Time, t types.Task) {
 	s.backdoor <- item{eta, t}
 }
 
+// Subscribe implements the Subscriber interface.
 func (s *Scheduler) Subscribe() <-chan types.Task {
 	return s.pub
 }
@@ -149,6 +154,7 @@ func (s *Scheduler) loop() {
 	}
 }
 
+// Close implements the subscriber interface. It stops publishing new tasks.
 func (s *Scheduler) Close() error {
 	log.Println("close sched Close.")
 	close(s.quit)
