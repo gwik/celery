@@ -11,8 +11,8 @@ import (
 	"github.com/streadway/amqp"
 	"golang.org/x/net/context"
 
+	"github.com/gwik/celery/amqputil"
 	"github.com/gwik/celery/types"
-	"github.com/gwik/celery/util/amqputil"
 )
 
 type amqpTask struct {

@@ -29,11 +29,11 @@ type fakeErr struct {
 }
 
 func (fakeErr) Temporary() bool {
-	return true
+	return false
 }
 
 func (fakeErr) Error() string {
-	return "fake temporary error."
+	return "fake error."
 }
 
 func (fakeErr) Timeout() bool {

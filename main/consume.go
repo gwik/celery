@@ -11,12 +11,12 @@ import (
 
 	"golang.org/x/net/context"
 
-	_ "github.com/gwik/celery/message/json"
+	_ "github.com/gwik/celery/jsonmessage"
 
 	"github.com/gwik/celery"
-	"github.com/gwik/celery/consumer/amqpconsumer"
+	"github.com/gwik/celery/amqpconsumer"
+	"github.com/gwik/celery/amqputil"
 	"github.com/gwik/celery/types"
-	"github.com/gwik/celery/util/amqputil"
 )
 
 func two(context context.Context, args []interface{}, kwargs map[string]interface{}) (interface{}, error) {
