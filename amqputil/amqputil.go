@@ -93,6 +93,7 @@ func (ar *Retry) Close() error {
 }
 
 func (ar *Retry) terminate() {
+	log.Println("retrier terminating...")
 	for {
 		select {
 		case req := <-ar.requests:
@@ -123,6 +124,7 @@ func (ar *Retry) loop() {
 					return
 				}
 				log.Printf("AMQP connection ready.")
+				connC = nil
 				in = ar.requests
 			case errC, ok := <-ar.closing:
 				if ok {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/gwik/celery/types"
 	"golang.org/x/net/context"
+	"sync/atomic"
 )
 
 type testSubscriber struct {
@@ -126,7 +127,7 @@ func TestRegisterFuncAndRunTask(t *testing.T) {
 	sub := newTestSubscriber()
 	done := make(chan struct{})
 	results := make(map[string]types.Result)
-	worker := NewWorker(1, sub, &testBackend{done, results}, nil)
+	worker := NewWorker(10, sub, &testBackend{done, results}, nil)
 
 	worker.RegisterFunc("job", func(ctx context.Context, val float64, list []string) (types.Result, error) {
 		return []interface{}{val, list}, nil
@@ -157,6 +158,50 @@ func TestRegisterFuncAndRunTask(t *testing.T) {
 		}
 	} else {
 		t.Fatal("expected a result")
+	}
+
+}
+
+func TestRetryTask(t *testing.T) {
+	sub := newTestSubscriber()
+	done := make(chan struct{})
+	results := make(map[string]types.Result)
+	sched := NewScheduler(sub)
+	worker := NewWorker(1, sched, &testBackend{done, results}, sched)
+
+	var count uint32
+
+	worker.RegisterFunc("job", func(ctx context.Context) (types.Result, error) {
+		atomic.AddUint32(&count, 1)
+		msg := MsgFromContext(ctx)
+		if msg.Retries < 3 {
+			return nil, Again("cause I want to.", time.Duration(10)*time.Millisecond)
+		}
+		defer close(done)
+		return atomic.LoadUint32(&count), nil
+	})
+
+	worker.Start()
+	defer worker.Close()
+
+	sub.Ch <- TaskStub(types.Message{
+		Task: "job",
+		ID:   "job1",
+		Args: []interface{}{},
+	})
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timeout.")
+	}
+
+	if res, exists := results["job1"]; exists {
+		if res.(uint32) != count && count != 2 {
+			t.Errorf("expected retries to be 2 was: %d", res.(uint32))
+		}
+	} else {
+		t.Error("result should be set.")
 	}
 
 }

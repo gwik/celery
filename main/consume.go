@@ -30,8 +30,9 @@ func add(context context.Context, args []interface{}, kwargs map[string]interfac
 
 func tryagain(ctx context.Context, args []interface{}, _ map[string]interface{}) (interface{}, error) {
 
-	delay, count := args[0].(float64), int(args[0].(float64))
+	delay, count := args[0].(float64), int(args[1].(float64))
 	msg := celery.MsgFromContext(ctx)
+	log.Printf("msg retries: %d/%d", msg.Retries, count)
 	if msg.Retries < count {
 		log.Printf("retry %s", msg.ID)
 		return nil, celery.Again("cause I want to.", time.Duration(delay)*time.Second)
