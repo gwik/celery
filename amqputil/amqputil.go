@@ -20,11 +20,8 @@ type Retry struct {
 	config   *amqp.Config
 	delay    time.Duration
 	closing  chan chan error
-	requests requestChan
+	requests chan chan<- *amqp.Channel
 }
-
-type request chan<- *amqp.Channel
-type requestChan chan request
 
 // NewRetry builds a new retry.
 func NewRetry(url string, config *amqp.Config, delay time.Duration) *Retry {
@@ -33,7 +30,7 @@ func NewRetry(url string, config *amqp.Config, delay time.Duration) *Retry {
 		config:   config,
 		delay:    delay,
 		closing:  make(chan chan error),
-		requests: make(requestChan, 1024),
+		requests: make(chan chan<- *amqp.Channel, 1024),
 	}
 
 	go ar.loop()
@@ -114,8 +111,8 @@ func (ar *Retry) loop() {
 		}
 		log.Println("AMQP connection ready.")
 
-		var out request
-		var in requestChan
+		var out chan<- *amqp.Channel
+		var in chan chan<- *amqp.Channel
 		var ach *amqp.Channel
 
 		ready := true
@@ -147,7 +144,7 @@ func (ar *Retry) loop() {
 	}
 }
 
-func (ar *Retry) enqueue(c request) {
+func (ar *Retry) enqueue(c chan<- *amqp.Channel) {
 	select {
 	case ar.requests <- c:
 	default:
