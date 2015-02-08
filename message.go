@@ -6,7 +6,7 @@ See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 /*
 types package provides common types for celery.
 */
-package types
+package celery
 
 import (
 	"fmt"

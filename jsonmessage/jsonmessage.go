@@ -17,7 +17,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/gwik/celery/types"
+	"github.com/gwik/celery"
 )
 
 type jsonMessage struct {
@@ -52,13 +52,13 @@ func (jm *jsonMessage) ExpiresAt() time.Time {
 	return t
 }
 
-func decodeJSONMessage(p []byte) (types.Message, error) {
+func decodeJSONMessage(p []byte) (celery.Message, error) {
 	m := &jsonMessage{}
 	err := json.Unmarshal(p, m)
 	if err != nil {
-		return types.Message{}, err
+		return celery.Message{}, err
 	}
-	return types.Message{
+	return celery.Message{
 		Task:    m.Task,
 		ID:      m.ID,
 		Args:    m.Args,
@@ -70,5 +70,5 @@ func decodeJSONMessage(p []byte) (types.Message, error) {
 }
 
 func init() {
-	types.RegisterMessageDecoder("application/json", decodeJSONMessage)
+	celery.RegisterMessageDecoder("application/json", decodeJSONMessage)
 }

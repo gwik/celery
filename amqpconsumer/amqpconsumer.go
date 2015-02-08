@@ -14,13 +14,13 @@ import (
 	"github.com/streadway/amqp"
 	"golang.org/x/net/context"
 
+	"github.com/gwik/celery"
 	"github.com/gwik/celery/amqputil"
-	"github.com/gwik/celery/types"
 )
 
 type amqpTask struct {
 	context.Context
-	msg *types.Message
+	msg *celery.Message
 	ch  *amqp.Channel
 	tag uint64 // delivery tag
 }
@@ -77,7 +77,7 @@ func DefaultConfig() Config {
 	return *defaultConfig
 }
 
-func (t *amqpTask) Msg() types.Message {
+func (t *amqpTask) Msg() celery.Message {
 	return *t.msg
 }
 
@@ -93,15 +93,15 @@ type amqpConsumer struct {
 	q      string
 	config *Config
 	retry  *amqputil.Retry
-	out    chan types.Task
+	out    chan celery.Task
 	quit   chan struct{}
 }
 
-var _ types.Subscriber = (*amqpConsumer)(nil)
+var _ celery.Subscriber = (*amqpConsumer)(nil)
 
 // NewAMQPSubscriber creates a new AMQP Subscriber. config can be nil, in
 // which case it will be set with DefaultConfig.
-func NewAMQPSubscriber(queue string, config *Config, retry *amqputil.Retry) types.Subscriber {
+func NewAMQPSubscriber(queue string, config *Config, retry *amqputil.Retry) celery.Subscriber {
 	if config == nil {
 		dcfg := DefaultConfig()
 		config = &dcfg
@@ -110,7 +110,7 @@ func NewAMQPSubscriber(queue string, config *Config, retry *amqputil.Retry) type
 		q:      queue,
 		config: config,
 		retry:  retry,
-		out:    make(chan types.Task),
+		out:    make(chan celery.Task),
 		quit:   make(chan struct{}),
 	}
 	go c.loop()
@@ -118,7 +118,7 @@ func NewAMQPSubscriber(queue string, config *Config, retry *amqputil.Retry) type
 }
 
 // Subscribe implements the Subscriber interface.
-func (c *amqpConsumer) Subscribe() <-chan types.Task {
+func (c *amqpConsumer) Subscribe() <-chan celery.Task {
 	return c.out
 }
 
@@ -167,8 +167,8 @@ func (c *amqpConsumer) rootContext() (context.Context, context.CancelFunc) {
 func (c *amqpConsumer) loop() {
 
 	var ch *amqp.Channel
-	var task types.Task
-	var out chan types.Task
+	var task celery.Task
+	var out chan celery.Task
 	var msgs <-chan amqp.Delivery
 	var ok bool
 
@@ -216,13 +216,13 @@ func (c *amqpConsumer) loop() {
 				continue
 			}
 			// log.Printf("%s %s", d.Body, d.ReplyTo)
-			msg, err := types.DecodeMessage(d.ContentType, d.Body)
+			msg, err := celery.DecodeMessage(d.ContentType, d.Body)
 			if err != nil {
 				log.Println(err)
 				d.Reject(true)
 				continue
 			}
-			mctx := types.ContextFromMessage(ctx, msg)
+			mctx := celery.ContextFromMessage(ctx, msg)
 			task = &amqpTask{mctx, &msg, ch, d.DeliveryTag}
 			out = c.out
 		}

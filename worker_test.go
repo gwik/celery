@@ -4,22 +4,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gwik/celery/types"
 	"golang.org/x/net/context"
 	"sync/atomic"
 )
 
 type testSubscriber struct {
-	Ch chan types.Task
+	Ch chan Task
 }
 
 func newTestSubscriber() *testSubscriber {
 	return &testSubscriber{
-		Ch: make(chan types.Task),
+		Ch: make(chan Task),
 	}
 }
 
-func (s *testSubscriber) Subscribe() <-chan types.Task {
+func (s *testSubscriber) Subscribe() <-chan Task {
 	return s.Ch
 }
 
@@ -30,7 +29,7 @@ func (s *testSubscriber) Close() error {
 
 type testTask struct {
 	context.Context
-	msg    types.Message
+	msg    Message
 	ack    func() error
 	reject func(bool) error
 }
@@ -43,21 +42,21 @@ func (t testTask) Reject(requeue bool) error {
 	return t.reject(requeue)
 }
 
-func (t testTask) Msg() types.Message {
+func (t testTask) Msg() Message {
 	return t.msg
 }
 
 type testBackend struct {
 	done      chan struct{}
-	published map[string]types.Result
+	published map[string]Result
 }
 
-func (t *testBackend) Publish(task types.Task, r *types.ResultMeta) {
+func (t *testBackend) Publish(task Task, r *ResultMeta) {
 	t.published[task.Msg().ID] = r.Result
 	close(t.done)
 }
 
-func TaskStub(msg types.Message) types.Task {
+func TaskStub(msg Message) Task {
 	return &testTask{
 		context.Background(),
 		msg,
@@ -68,7 +67,7 @@ func TaskStub(msg types.Message) types.Task {
 
 func TestRegisterAndRunTask(t *testing.T) {
 	sub := newTestSubscriber()
-	results := make(map[string]types.Result)
+	results := make(map[string]Result)
 	done := make(chan struct{})
 	backend := &testBackend{done, results}
 	worker := NewWorker(1, sub, backend, nil)
@@ -100,7 +99,7 @@ func TestRegisterAndRunTask(t *testing.T) {
 	worker.Start()
 	defer worker.Close()
 
-	sub.Ch <- TaskStub(types.Message{
+	sub.Ch <- TaskStub(Message{
 		Task:   "job",
 		ID:     "job1",
 		Args:   []interface{}{"foo", 1},
@@ -126,17 +125,17 @@ func TestRegisterAndRunTask(t *testing.T) {
 func TestRegisterFuncAndRunTask(t *testing.T) {
 	sub := newTestSubscriber()
 	done := make(chan struct{})
-	results := make(map[string]types.Result)
+	results := make(map[string]Result)
 	worker := NewWorker(10, sub, &testBackend{done, results}, nil)
 
-	worker.RegisterFunc("job", func(ctx context.Context, val float64, list []string) (types.Result, error) {
+	worker.RegisterFunc("job", func(ctx context.Context, val float64, list []string) (Result, error) {
 		return []interface{}{val, list}, nil
 	})
 
 	worker.Start()
 	defer worker.Close()
 
-	sub.Ch <- TaskStub(types.Message{
+	sub.Ch <- TaskStub(Message{
 		Task: "job",
 		ID:   "job1",
 		Args: []interface{}{float64(2.86), []string{"a", "b", "c"}},
@@ -165,13 +164,13 @@ func TestRegisterFuncAndRunTask(t *testing.T) {
 func TestRetryTask(t *testing.T) {
 	sub := newTestSubscriber()
 	done := make(chan struct{})
-	results := make(map[string]types.Result)
+	results := make(map[string]Result)
 	sched := NewScheduler(sub)
 	worker := NewWorker(1, sched, &testBackend{done, results}, sched)
 
 	var count uint32
 
-	worker.RegisterFunc("job", func(ctx context.Context) (types.Result, error) {
+	worker.RegisterFunc("job", func(ctx context.Context) (Result, error) {
 		atomic.AddUint32(&count, 1)
 		msg := MsgFromContext(ctx)
 		if msg.Retries < 3 {
@@ -184,7 +183,7 @@ func TestRetryTask(t *testing.T) {
 	worker.Start()
 	defer worker.Close()
 
-	sub.Ch <- TaskStub(types.Message{
+	sub.Ch <- TaskStub(Message{
 		Task: "job",
 		ID:   "job1",
 		Args: []interface{}{},

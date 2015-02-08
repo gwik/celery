@@ -100,8 +100,8 @@ if __name__ == "__main__":
         panic.delay("panic", "wrong number of arguments")
 
     # ex_result()
-    ex1()
-    # retry()
+    # ex1()
+    retry()
     # for i in range(1000):
     #     notify(i)
 

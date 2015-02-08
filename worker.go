@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/gwik/celery/syncutil"
-	"github.com/gwik/celery/types"
 	"golang.org/x/net/context"
 )
 
@@ -28,18 +27,18 @@ const (
 )
 
 type retryTask struct {
-	types.Task
+	Task
 	retries int
 }
 
-func retries(t types.Task) int {
+func retries(t Task) int {
 	if rt, ok := t.(retryTask); ok {
 		return rt.retries
 	}
 	return 0
 }
 
-func retry(t types.Task) types.Task {
+func retry(t Task) Task {
 	if rt, ok := t.(retryTask); ok {
 		rt.retries += 1
 		return rt
@@ -50,14 +49,14 @@ func retry(t types.Task) types.Task {
 
 // MsgFromContext can be called within task function to get the
 // celery message from the context.
-func MsgFromContext(ctx context.Context) types.Message {
-	task := ctx.Value(taskKey).(types.Task)
+func MsgFromContext(ctx context.Context) Message {
+	task := ctx.Value(taskKey).(Task)
 	msg := task.Msg()
 	msg.Retries = retries(task)
 	return msg
 }
 
-func jobContext(t types.Task) context.Context {
+func jobContext(t Task) context.Context {
 	ctx := context.WithValue(t, taskKey, t)
 	ctx = context.WithValue(ctx, retryKey, retries(t))
 	return ctx
@@ -98,12 +97,12 @@ func (cd *cancelProxy) Close() {
 
 // Worker runs tasks and publish their results.
 type Worker struct {
-	handlerReg map[string]types.HandleFunc
-	sub        <-chan types.Task
+	handlerReg map[string]HandleFunc
+	sub        <-chan Task
 	gate       *syncutil.Gate
-	results    chan *types.Result
+	results    chan *Result
 	quit       chan struct{}
-	backend    types.Backend
+	backend    Backend
 	retry      *Scheduler
 
 	// stats
@@ -121,12 +120,12 @@ type Worker struct {
 //
 // retry is a Scheduler used for tasks that are retried after some time (usually same as sub).
 // It can be nil, in which case the tasks are not retried.
-func NewWorker(concurrency int, sub types.Subscriber, backend types.Backend, retry *Scheduler) *Worker {
+func NewWorker(concurrency int, sub Subscriber, backend Backend, retry *Scheduler) *Worker {
 	return &Worker{
-		handlerReg: make(map[string]types.HandleFunc),
+		handlerReg: make(map[string]HandleFunc),
 		sub:        sub.Subscribe(),
 		gate:       syncutil.NewGate(concurrency),
-		results:    make(chan *types.Result),
+		results:    make(chan *Result),
 		quit:       make(chan struct{}),
 		backend:    backend,
 		retry:      retry,
@@ -179,7 +178,7 @@ func (w *Worker) RegisterFunc(name string, fn interface{}) {
 
 // Register registers a HandleFunc function with the given name. It should be
 // used before Start.
-func (w *Worker) Register(name string, h types.HandleFunc) {
+func (w *Worker) Register(name string, h HandleFunc) {
 	if _, exists := w.handlerReg[name]; exists {
 		log.Fatalf("Already registered: %s.", name)
 	}
@@ -241,7 +240,7 @@ func (w *Worker) loop() {
 	}
 }
 
-func (w *Worker) run(task types.Task, h types.HandleFunc) {
+func (w *Worker) run(task Task, h HandleFunc) {
 	defer atomic.AddUint32(&w.running, ^uint32(0)) // -1
 	defer w.gate.Done()
 	defer func() {
@@ -281,8 +280,8 @@ func (w *Worker) run(task types.Task, h types.HandleFunc) {
 
 	task.Ack()
 	log.Printf("job %s/%s succeeded result: %v", msg.Task, msg.ID, v)
-	w.backend.Publish(task, &types.ResultMeta{
-		Status: types.SUCCESS,
+	w.backend.Publish(task, &ResultMeta{
+		Status: SUCCESS,
 		Result: v,
 		TaskId: msg.ID,
 	})

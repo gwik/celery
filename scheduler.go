@@ -9,13 +9,11 @@ import (
 	"container/heap"
 	"log"
 	"time"
-
-	"github.com/gwik/celery/types"
 )
 
 type item struct {
 	eta time.Time
-	t   types.Task
+	t   Task
 }
 
 var empty item = item{}
@@ -55,21 +53,21 @@ func (t table) Top() item {
 // their ETA is reached.
 type Scheduler struct {
 	t        *table
-	sub      <-chan types.Task
-	pub      chan types.Task
+	sub      <-chan Task
+	pub      chan Task
 	backdoor chan item
 	quit     chan struct{}
 }
 
 // NewScheduler returns a new scheduler pulling tasks from sub.
-func NewScheduler(sub types.Subscriber) *Scheduler {
+func NewScheduler(sub Subscriber) *Scheduler {
 	t := make(table, 0, 32)
 	heap.Init(&t)
 
 	sched := &Scheduler{
 		t:        &t,
 		sub:      sub.Subscribe(),
-		pub:      make(chan types.Task),
+		pub:      make(chan Task),
 		backdoor: make(chan item),
 		quit:     make(chan struct{}),
 	}
@@ -79,16 +77,16 @@ func NewScheduler(sub types.Subscriber) *Scheduler {
 }
 
 // Publish publishes a task at the given ETA.
-func (s *Scheduler) Publish(eta time.Time, t types.Task) {
+func (s *Scheduler) Publish(eta time.Time, t Task) {
 	s.backdoor <- item{eta, t}
 }
 
 // Subscribe implements the Subscriber interface.
-func (s *Scheduler) Subscribe() <-chan types.Task {
+func (s *Scheduler) Subscribe() <-chan Task {
 	return s.pub
 }
 
-func (s *Scheduler) schedule(eta time.Time, t types.Task) time.Duration {
+func (s *Scheduler) schedule(eta time.Time, t Task) time.Duration {
 	delta := eta.Sub(time.Now())
 	if delta > 0 {
 		heap.Push(s.t, item{eta, t})
@@ -96,14 +94,14 @@ func (s *Scheduler) schedule(eta time.Time, t types.Task) time.Duration {
 	return delta
 }
 
-func (s *Scheduler) scheduleTask(t types.Task) time.Duration {
+func (s *Scheduler) scheduleTask(t Task) time.Duration {
 	return s.schedule(t.Msg().ETA, t)
 }
 
 func (s *Scheduler) loop() {
 	var timer <-chan time.Time
-	var t types.Task
-	var out chan<- types.Task
+	var t Task
+	var out chan<- Task
 
 	defer func() {
 		log.Println("Close scheduler.")

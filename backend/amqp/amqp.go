@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gwik/celery/types"
 	"github.com/streadway/amqp"
 )
 
@@ -22,8 +21,8 @@ const (
 )
 
 type result struct {
-	t types.Task
-	r *types.ResultMeta
+	t Task
+	r *ResultMeta
 }
 
 type amqpBackend struct {
@@ -32,7 +31,7 @@ type amqpBackend struct {
 	encoder func(v interface{}) ([]byte, error)
 }
 
-func NewAMQPBackend() types.Backend {
+func NewAMQPBackend() Backend {
 	b := &amqpBackend{
 		results: make(chan *result, 100),
 		quit:    make(chan struct{}),
@@ -142,7 +141,7 @@ func (b *amqpBackend) loop() {
 	}
 }
 
-func (b *amqpBackend) Publish(t types.Task, r *types.ResultMeta) {
+func (b *amqpBackend) Publish(t Task, r *ResultMeta) {
 	b.results <- &result{t, r}
 }
 

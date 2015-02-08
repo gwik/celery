@@ -16,7 +16,6 @@ import (
 
 	"github.com/gwik/celery"
 	"github.com/gwik/celery/builder"
-	"github.com/gwik/celery/types"
 )
 
 func two(context context.Context, args []interface{}, kwargs map[string]interface{}) (interface{}, error) {
@@ -54,10 +53,6 @@ func paniking(ctx context.Context, err string) (string, error) {
 	panic(err)
 	return "", nil
 }
-
-type noopBackend struct{}
-
-func (noopBackend) Publish(types.Task, *types.ResultMeta) {}
 
 func declare(worker *celery.Worker) {
 	worker.Register("tasks.add", add)
