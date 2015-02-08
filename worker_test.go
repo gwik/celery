@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"golang.org/x/net/context"
+	"sync"
 	"sync/atomic"
 )
 
@@ -47,13 +48,36 @@ func (t testTask) Msg() Message {
 }
 
 type testBackend struct {
-	done      chan struct{}
-	published map[string]Result
+	mu        sync.Mutex
+	published map[string]chan Result
+}
+
+func newTestBackend() *testBackend {
+	return &testBackend{
+		mu:        sync.Mutex{},
+		published: make(map[string]chan Result),
+	}
+}
+
+func (t *testBackend) resultChan(id string) chan Result {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if ch, ok := t.published[id]; ok {
+		return ch
+	}
+	ch := make(chan Result, 1)
+	t.published[id] = ch
+	return ch
+}
+
+func (t *testBackend) Notify(id string) <-chan Result {
+	return t.resultChan(id)
 }
 
 func (t *testBackend) Publish(task Task, r *ResultMeta) {
-	t.published[task.Msg().ID] = r.Result
-	close(t.done)
+	ch := t.resultChan(task.Msg().ID)
+	ch <- r.Result
 }
 
 func TaskStub(msg Message) Task {
@@ -67,10 +91,8 @@ func TaskStub(msg Message) Task {
 
 func TestRegisterAndRunTask(t *testing.T) {
 	sub := newTestSubscriber()
-	results := make(map[string]Result)
-	done := make(chan struct{})
-	backend := &testBackend{done, results}
-	worker := NewWorker(1, sub, backend, nil)
+	results := newTestBackend()
+	worker := NewWorker(1, sub, results, nil)
 
 	worker.Register("job", func(ctx context.Context, args []interface{}, kwargs map[string]interface{}) (interface{}, error) {
 
@@ -107,28 +129,22 @@ func TestRegisterAndRunTask(t *testing.T) {
 	})
 
 	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("timeout.")
-	}
-
-	if res, exists := results["job1"]; exists {
+	case res := <-results.Notify("job1"):
 		if res.(string) != "result" {
 			t.Fatalf("expected result to be `result`")
 		}
-	} else {
-		t.Fatal("expected a result")
+	case <-time.After(time.Second):
+		t.Fatal("timeout.")
 	}
 
 }
 
 func TestRegisterFuncAndRunTask(t *testing.T) {
 	sub := newTestSubscriber()
-	done := make(chan struct{})
-	results := make(map[string]Result)
-	worker := NewWorker(10, sub, &testBackend{done, results}, nil)
+	results := newTestBackend()
+	worker := NewWorker(10, sub, results, nil)
 
-	worker.RegisterFunc("job", func(ctx context.Context, val float64, list []string) (Result, error) {
+	worker.RegisterFunc("job", func(ctx context.Context, val float64, list []string) ([]interface{}, error) {
 		return []interface{}{val, list}, nil
 	})
 
@@ -142,41 +158,34 @@ func TestRegisterFuncAndRunTask(t *testing.T) {
 	})
 
 	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("timeout.")
-	}
-
-	if res, exists := results["job1"]; exists {
-		res := res.([]interface{})
+	case r := <-results.Notify("job1"):
+		res := r.([]interface{})
 		if v, ok := res[0].(float64); !ok || v != 2.86 {
 			t.Errorf("expected result[0] to be 2.86 float64 was: %v", res)
 		}
 		if _, ok := res[1].([]string); !ok {
 			t.Fatalf("expected result[1] to be a list of strings")
 		}
-	} else {
-		t.Fatal("expected a result")
+	case <-time.After(time.Second):
+		t.Fatal("timeout.")
 	}
 
 }
 
 func TestRetryTask(t *testing.T) {
 	sub := newTestSubscriber()
-	done := make(chan struct{})
-	results := make(map[string]Result)
+	results := newTestBackend()
 	sched := NewScheduler(sub)
-	worker := NewWorker(1, sched, &testBackend{done, results}, sched)
+	worker := NewWorker(1, sched, results, sched)
 
 	var count uint32
 
-	worker.RegisterFunc("job", func(ctx context.Context) (Result, error) {
+	worker.RegisterFunc("job", func(ctx context.Context) (uint32, error) {
 		atomic.AddUint32(&count, 1)
 		msg := MsgFromContext(ctx)
 		if msg.Retries < 3 {
-			return nil, Again("cause I want to.", time.Duration(10)*time.Millisecond)
+			return 0, Again("cause I want to.", time.Duration(10)*time.Millisecond)
 		}
-		defer close(done)
 		return atomic.LoadUint32(&count), nil
 	})
 
@@ -190,17 +199,12 @@ func TestRetryTask(t *testing.T) {
 	})
 
 	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("timeout.")
-	}
-
-	if res, exists := results["job1"]; exists {
+	case res := <-results.Notify("job1"):
 		if res.(uint32) != count && count != 2 {
 			t.Errorf("expected retries to be 2 was: %d", res.(uint32))
 		}
-	} else {
-		t.Error("result should be set.")
+	case <-time.After(time.Second):
+		t.Fatal("timeout.")
 	}
 
 }
