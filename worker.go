@@ -325,7 +325,7 @@ func Retry(err error, delay time.Duration) Retryable {
 	}
 }
 
-// Again is a helper function to retry a task with a reason after a delay.
+// Again is a helper function to retry a task with a reason after delay.
 func Again(reason string, delay time.Duration) Retryable {
 	return &RetryError{
 		errors.New(reason),

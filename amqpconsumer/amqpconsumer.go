@@ -40,9 +40,6 @@ type Config struct {
 	CNoLocal   bool
 	CNoWait    bool
 	CArgs      amqp.Table // consumer extra arguments
-
-	// Celery
-	AcksLate bool
 }
 
 var defaultConfig = &Config{
@@ -82,10 +79,12 @@ func (t *amqpTask) Msg() celery.Message {
 }
 
 func (t *amqpTask) Ack() error {
+	// XXX: test what happens with AutoAck
 	return t.ch.Ack(t.tag, false)
 }
 
 func (t *amqpTask) Reject(requeue bool) error {
+	// XXX: test what happens with AutoAck
 	return t.ch.Reject(t.tag, requeue)
 }
 
