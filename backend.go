@@ -1,7 +1,7 @@
 package celery
 
-// NoOpBackend is a Backend that doesn't anything
-type NoOpBackend struct{}
+// DiscardBackend is a Backend that doesn't anything
+type DiscardBackend struct{}
 
 // Publish implements the Backend interface.
-func (NoOpBackend) Publish(Task, *ResultMeta) {}
+func (DiscardBackend) Publish(Task, *ResultMeta) {}

@@ -62,13 +62,13 @@ func (ar *Retry) loop() {
 
 	for {
 		var out chan<- *amqp.Channel
+		var in chan chan<- *amqp.Channel
 		var ach *amqp.Channel
 		var conn *amqp.Connection
 
 		for {
 
 			for conn == nil { // connection retry loop
-
 				log.Printf("connecting to %s", ar.url)
 
 				if ar.config == nil {
@@ -96,9 +96,9 @@ func (ar *Retry) loop() {
 						return
 					}
 				}
+				in = ar.requests
 			}
 
-			log.Printf("Connected to AMQP at %s", ar.url)
 			select {
 			case errC := <-ar.closing:
 				close(ar.closing)
@@ -108,7 +108,9 @@ func (ar *Retry) loop() {
 				close(out)
 				out = nil
 				ach = nil
-			case c := <-ar.requests:
+				in = ar.requests
+			case c := <-in:
+				in = nil
 				ch, err := conn.Channel()
 				if err == nil {
 					ach = ch

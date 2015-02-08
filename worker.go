@@ -148,8 +148,6 @@ func (w *Worker) RegisterFunc(name string, fn interface{}) {
 		panic(fmt.Sprintf("%v is not a func", fn))
 	}
 
-	fmt.Printf("%v %s", fn, name)
-
 	var wrapper = func(ctx context.Context, args []interface{}, _ map[string]interface{}) (interface{}, error) {
 		in := make([]reflect.Value, len(args)+1)
 		in[0] = reflect.ValueOf(ctx)

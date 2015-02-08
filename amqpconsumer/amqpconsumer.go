@@ -169,6 +169,7 @@ func (c *amqpConsumer) loop() {
 	var task celery.Task
 	var out chan celery.Task
 	var msgs <-chan amqp.Delivery
+	var in <-chan amqp.Delivery
 	var ok bool
 
 	ctx, abort := c.rootContext()
@@ -203,9 +204,12 @@ func (c *amqpConsumer) loop() {
 			log.Println("New channel.")
 			ctx, abort = c.rootContext()
 			chch = nil
+			in = msgs
 		case out <- task: // send task downstream.
 			out = nil
-		case d, ok := <-msgs: // wait for AMQP deliveries
+			in = msgs
+		case d, ok := <-in: // wait for AMQP deliveries
+			in = nil
 			if !ok {
 				log.Println("Closed messages")
 				abort()

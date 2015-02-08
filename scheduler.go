@@ -102,6 +102,8 @@ func (s *Scheduler) loop() {
 	var timer <-chan time.Time
 	var t Task
 	var out chan<- Task
+	in := s.sub
+	back := s.backdoor
 
 	defer func() {
 		log.Println("Close scheduler.")
@@ -129,23 +131,31 @@ func (s *Scheduler) loop() {
 			return
 		case out <- t:
 			out = nil
+			in = s.sub
+			back = s.backdoor
 		case <-timer:
 			t = heap.Pop(s.t).(item).t
 			out = s.pub
-		case it, ok := <-s.backdoor:
+			in = nil
+			back = nil
+		case it, ok := <-back:
 			if !ok {
 				return
 			}
 			if when := s.schedule(it.eta, it.t); when <= 0 {
 				out = s.pub
+				in = nil
+				back = nil
 				t = it.t
 			}
-		case it, ok := <-s.sub:
+		case it, ok := <-in:
 			if !ok {
 				return
 			}
 			if when := s.scheduleTask(it); when <= 0 {
 				out = s.pub
+				in = nil
+				back = nil
 				t = it
 			}
 		}
