@@ -3,24 +3,33 @@ Copyright (c) 2014 Antonin Amand <antonin.amand@gmail.com>, All rights reserved.
 See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 */
 
+/*
+
+Package amqputil provides utilities to work with http://github.com/streadway/amqp/ package.
+
+*/
 package amqputil
 
 import (
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/streadway/amqp"
 )
 
-// Retry connects to amqp and retry on temporary network failures.
+// Retry connects to AMQP and retry on network failures.
 type Retry struct {
-	url      string
-	config   *amqp.Config
-	delay    time.Duration
-	closing  chan chan error
+	url     string
+	config  *amqp.Config
+	delay   time.Duration
+	closing chan chan error
+	err     error
+
+	mu       sync.RWMutex
 	requests chan chan<- *amqp.Channel
-	err      error
+	stopped  bool
 }
 
 // NewRetry builds a new retry.
@@ -30,59 +39,14 @@ func NewRetry(url string, config *amqp.Config, delay time.Duration) *Retry {
 		config:   config,
 		delay:    delay,
 		closing:  make(chan chan error),
+		mu:       sync.RWMutex{},
+		stopped:  false,
 		requests: make(chan chan<- *amqp.Channel, 1024),
 	}
 
 	go ar.loop()
 
 	return ar
-}
-
-func (ar *Retry) connect() <-chan *amqp.Connection {
-
-	ch := make(chan *amqp.Connection)
-
-	go func() {
-		defer close(ch)
-
-		var conn *amqp.Connection
-		var retry <-chan time.Time
-
-		for {
-			log.Printf("connecting to %s", ar.url)
-
-			if ar.config == nil {
-				conn, ar.err = amqp.Dial(ar.url)
-			} else {
-				conn, ar.err = amqp.DialConfig(ar.url, *ar.config)
-			}
-
-			if ar.err != nil {
-				if _, ok := ar.err.(net.Error); ok {
-					log.Printf("could not connect to %s will retry after %v: %v\n", ar.url, ar.delay, ar.err)
-					retry = time.After(ar.delay)
-				} else {
-					return
-				}
-			}
-
-			select {
-			case <-retry:
-				retry = nil
-				continue
-			case errC := <-ar.closing:
-				if ar.err == nil {
-					errC <- conn.Close()
-				} else {
-					errC <- ar.err
-				}
-			case ch <- conn:
-			}
-			return
-		}
-	}()
-
-	return ch
 }
 
 // Close closes the AMQP connections and stops the retry.
@@ -92,54 +56,61 @@ func (ar *Retry) Close() error {
 	return <-errC
 }
 
-func (ar *Retry) terminate() {
-	log.Println("retrier terminating...")
-	for {
-		select {
-		case req := <-ar.requests:
-			close(req)
-		case errC := <-ar.closing:
-			errC <- ar.err
-			return
-		}
-	}
-}
-
 func (ar *Retry) loop() {
+
+	defer ar.terminate()
 
 	for {
 		var out chan<- *amqp.Channel
 		var in chan chan<- *amqp.Channel
 		var ach *amqp.Channel
 		var conn *amqp.Connection
-		var ok bool
-
-		connC := ar.connect()
 
 		for {
+
+			for conn == nil { // connection retry loop
+
+				log.Printf("connecting to %s", ar.url)
+
+				if ar.config == nil {
+					conn, ar.err = amqp.Dial(ar.url)
+				} else {
+					conn, ar.err = amqp.DialConfig(ar.url, *ar.config)
+				}
+				if ar.err != nil {
+					if _, ok := ar.err.(net.Error); ok {
+						log.Printf("could not connect to %s will retry after %v: %v", ar.url, ar.delay, ar.err)
+						select {
+						case <-time.After(ar.delay):
+							continue
+						case errC := <-ar.closing:
+							close(ar.closing)
+							if conn != nil {
+								errC <- conn.Close()
+							} else {
+								errC <- ar.err
+							}
+							return
+						}
+					} else {
+						log.Printf("AMQP error: %v", ar.err)
+						return
+					}
+				}
+			}
+
+			log.Printf("Connected to AMQP at %s", ar.url)
 			select {
-			case conn, ok = <-connC:
-				if !ok {
-					ar.terminate()
-					return
-				}
-				log.Printf("AMQP connection ready.")
-				connC = nil
-				in = ar.requests
-			case errC, ok := <-ar.closing:
-				if ok {
-					errC <- conn.Close()
-				}
+			case errC := <-ar.closing:
+				close(ar.closing)
+				errC <- conn.Close()
 				return
 			case out <- ach:
 				close(out)
 				out = nil
 				ach = nil
 				in = ar.requests
-			case c, ok := <-in:
-				if !ok {
-					return
-				}
+			case c := <-in:
 				in = nil
 				ch, err := conn.Channel()
 				if err == nil {
@@ -149,18 +120,40 @@ func (ar *Retry) loop() {
 				}
 				// re-queue
 				ar.enqueue(c)
-				connC = ar.connect()
+				conn = nil
 			}
 		}
 	}
 }
 
-func (ar *Retry) enqueue(c chan<- *amqp.Channel) {
-	select {
-	case ar.requests <- c:
-	default:
-		go func() { ar.requests <- c }()
+func (ar *Retry) terminate() {
+	// close is protected by a Write lock to prevent a data race.
+	// The write lock ensure that write (close) happens before read (send in enqueue).
+	ar.mu.Lock()
+	ar.stopped = true
+	close(ar.requests)
+	ar.mu.Unlock()
+
+	for req := range ar.requests {
+		close(req)
 	}
+	errC, ok := <-ar.closing
+	if ok {
+		errC <- ar.err
+		close(ar.closing)
+	}
+}
+
+func (ar *Retry) enqueue(c chan<- *amqp.Channel) {
+	ar.mu.RLock()
+	defer ar.mu.RUnlock()
+
+	if ar.stopped {
+		close(c)
+		return
+	}
+
+	ar.requests <- c
 }
 
 // Channel returns a chan of AMQP Channels. When the AMQP connection is
@@ -168,9 +161,9 @@ func (ar *Retry) enqueue(c chan<- *amqp.Channel) {
 // if the chan is closed before sending a channel it means an error
 // occured and the receiver must not call the method again.
 func (ar *Retry) Channel() <-chan *amqp.Channel {
-	// getter is buffered to avoid blocking
-	// if reveiver is not listening it won't leak
-	// and it won't wait forever, preveting others
+	// c is buffered to avoid blocking.
+	// If reveiver is not listening it won't leak
+	// and it won't wait forever, preveting other callers
 	// from getting their channel.
 	c := make(chan *amqp.Channel, 1)
 	ar.enqueue(c)
