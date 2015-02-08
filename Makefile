@@ -3,9 +3,10 @@ build:
 	go build main/consume.go
 
 deps:
-	go get
+	go get github.com/streadway/amqp
+	go get golang.org/x/net/context
 
 test:
 	go test -race .
 
-travis: deps build test
+travis: deps test
