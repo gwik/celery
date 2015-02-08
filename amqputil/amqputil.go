@@ -62,7 +62,6 @@ func (ar *Retry) loop() {
 
 	for {
 		var out chan<- *amqp.Channel
-		var in chan chan<- *amqp.Channel
 		var ach *amqp.Channel
 		var conn *amqp.Connection
 
@@ -109,9 +108,7 @@ func (ar *Retry) loop() {
 				close(out)
 				out = nil
 				ach = nil
-				in = ar.requests
-			case c := <-in:
-				in = nil
+			case c := <-ar.requests:
 				ch, err := conn.Channel()
 				if err == nil {
 					ach = ch
