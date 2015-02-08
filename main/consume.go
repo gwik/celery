@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -14,8 +15,7 @@ import (
 	_ "github.com/gwik/celery/jsonmessage"
 
 	"github.com/gwik/celery"
-	"github.com/gwik/celery/amqpconsumer"
-	"github.com/gwik/celery/amqputil"
+	"github.com/gwik/celery/builder"
 	"github.com/gwik/celery/types"
 )
 
@@ -41,6 +41,10 @@ func tryagain(ctx context.Context, args []interface{}, _ map[string]interface{})
 	return nil, nil
 }
 
+func tryN(ctx context.Context) (interface{}, error) {
+	return nil, celery.RetryNTimes(3, ctx, errors.New("error."), 2*time.Second)
+}
+
 func byname(ctx context.Context, foo string, bar float64) (string, error) {
 	log.Printf("call by name %v %v %v", ctx, foo, bar)
 	return "results string", nil
@@ -55,6 +59,14 @@ type noopBackend struct{}
 
 func (noopBackend) Publish(types.Task, *types.ResultMeta) {}
 
+func declare(worker *celery.Worker) {
+	worker.Register("tasks.add", add)
+	worker.Register("tasks.two", two)
+	worker.Register("tasks.tryagain", tryagain)
+	worker.RegisterFunc("tasks.byname", byname)
+	worker.RegisterFunc("tasks.panic", paniking)
+}
+
 func Consume(queueName string) error {
 
 	if os.Getenv("LOG_OFF") != "" {
@@ -65,26 +77,7 @@ func Consume(queueName string) error {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
 
-	retry := amqputil.NewRetry(os.Getenv("AMQP_URL"), nil, 2*time.Second)
-
-	config := amqpconsumer.DefaultConfig()
-	config.QDurable = true
-
-	sched := celery.NewScheduler(amqpconsumer.NewAMQPSubscriber(queueName, &config, retry))
-
-	// backend := NewAMQPBackend()
-	worker := celery.NewWorker(100, sched, noopBackend{}, sched)
-
-	worker.Register("tasks.add", add)
-	worker.Register("tasks.two", two)
-	worker.Register("tasks.tryagain", tryagain)
-	worker.RegisterFunc("tasks.byname", byname)
-	worker.RegisterFunc("tasks.panic", paniking)
-
-	worker.Start()
-
-	forever := make(chan struct{})
-	<-forever
+	builder.Serve(queueName, declare)
 
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"reflect"
 	"runtime/debug"
 	"sync/atomic"
@@ -134,9 +135,10 @@ func NewWorker(concurrency int, sub types.Subscriber, backend types.Backend, ret
 
 // RegisterFunc registers a function that must have a golang.org/x/context.Context as first argument.
 // Other arguments will be passed from the message arguments.
-// The return must be (types.Result, error).
+// The return must be some kind of (interface{}, error). First returned argument must be serializable
+// by the backend to publish the result.
 //
-// 		w.RegisterFunc("tasks.add", func(ctx context.Context, a float64, b float64) (types.Result, error) {
+// 		w.RegisterFunc("tasks.add", func(ctx context.Context, a float64, b float64) (float64, error) {
 //			return a + b, nil
 // 		})
 //
@@ -304,6 +306,16 @@ var _ Retryable = (*RetryError)(nil)
 // At implements the Retryable interface. It is the time
 func (re *RetryError) At() time.Time {
 	return re.at
+}
+
+// RetryNTimes is helper function that return a Retryable error if tried less than n times.
+// It will retry in delay power the number of previous tries.
+func RetryNTimes(n int, ctx context.Context, err error, delay time.Duration) error {
+	msg := MsgFromContext(ctx)
+	if msg.Retries > n {
+		return err
+	}
+	return Retry(err, time.Duration(math.Pow(delay.Seconds(), float64(msg.Retries+1)))*time.Second)
 }
 
 // Retry is a helper function to retry a task on error after delay.

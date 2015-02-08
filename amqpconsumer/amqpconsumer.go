@@ -3,6 +3,9 @@ Copyright (c) 2014-2015 Antonin Amand <antonin.amand@gmail.com>, All rights rese
 See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 */
 
+/*
+	Package amqpconsumer implements a Subscriber that pulls messages from AMQP.
+*/
 package amqpconsumer
 
 import (
@@ -37,6 +40,9 @@ type Config struct {
 	CNoLocal   bool
 	CNoWait    bool
 	CArgs      amqp.Table // consumer extra arguments
+
+	// Celery
+	AcksLate bool
 }
 
 var defaultConfig = &Config{
@@ -56,18 +62,17 @@ var defaultConfig = &Config{
 
 // DefaultConfig returns a config with the following defaults:
 //
-// QDurable:    false,
-// QAutoDelete: false,
-// QExclusive:  false,
-// QNoWait:     false,
-// QArgs:      nil,
-//
-// Consumer:  "",
-// CAutoACK:   false,
-// CExclusive: false,
-// CNoLocal:   false,
-// CNoWait:    false,
-// CArgs:     nil,
+// 		QDurable:    false,
+// 		QAutoDelete: false,
+// 		QExclusive:  false,
+// 		QNoWait:     false,
+// 		QArgs:       nil,
+// 		Consumer:    "",
+// 		CAutoACK:    false,
+// 		CExclusive:  false,
+// 		CNoLocal:    false,
+// 		CNoWait:     false,
+// 		CArgs:       nil,
 func DefaultConfig() Config {
 	return *defaultConfig
 }
@@ -152,6 +157,13 @@ func (c *amqpConsumer) declare(ch *amqp.Channel) (<-chan amqp.Delivery, error) {
 	return msgs, nil
 }
 
+func (c *amqpConsumer) rootContext() (context.Context, context.CancelFunc) {
+	if c.config.CAutoACK {
+		return context.Background(), func() {}
+	}
+	return context.WithCancel(context.Background())
+}
+
 func (c *amqpConsumer) loop() {
 
 	var ch *amqp.Channel
@@ -160,8 +172,8 @@ func (c *amqpConsumer) loop() {
 	var msgs <-chan amqp.Delivery
 	var ok bool
 
+	ctx, abort := c.rootContext()
 	chch := c.retry.Channel()
-	ctx, abort := context.WithCancel(context.Background())
 
 	defer close(c.out)
 	defer func() {
@@ -190,7 +202,7 @@ func (c *amqpConsumer) loop() {
 				continue
 			}
 			log.Println("New channel.")
-			ctx, abort = context.WithCancel(context.Background())
+			ctx, abort = c.rootContext()
 			chch = nil
 		case out <- task: // send task downstream.
 			out = nil
