@@ -58,8 +58,15 @@ func (b *amqpBackend) declare(ch *amqp.Channel) error {
 }
 
 func (b *amqpBackend) declareResultQueue(name string, ch *amqp.Channel) error {
-	_, err := ch.QueueDeclare(name, true, true, false, false, amqp.Table{"x-expires": int32(86400000)})
-	return err
+	if _, err := ch.QueueDeclare(name, true, true, false, false, amqp.Table{"x-expires": int32(86400000)}); err != nil {
+		return err
+	}
+
+	if err := ch.QueueBind(name, name, "celeryresults", false, nil); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (b *amqpBackend) loop() {
@@ -94,12 +101,11 @@ func (b *amqpBackend) loop() {
 				log.Printf("Failed to encoding result: %v", err)
 				break
 			}
-			if err != nil {
-				log.Printf("Failed to declare result queue %s: %v", key, err)
-				break
-			}
 			if err := b.declareResultQueue(key, ch); err != nil {
-				panic(err)
+				log.Printf("Failed to declare result queue %s: %v", key, err)
+				chch = b.retry.Channel()
+				in = nil
+				break
 			}
 			err = ch.Publish(
 				"celeryresults",
