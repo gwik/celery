@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gwik/celery"
+	// "github.com/gwik/celery/amqpbackend"
 	"github.com/gwik/celery/amqpconsumer"
 	"github.com/gwik/celery/amqputil"
 
@@ -27,9 +28,10 @@ func Serve(queue string, declare func(worker *celery.Worker)) {
 
 	retry := amqputil.NewRetry(conf.BrokerURL, nil, 2*time.Second)
 	sched := celery.NewScheduler(amqpconsumer.NewAMQPSubscriber(queue, nil, retry))
+	// backend := amqpbackend.NewAMQPBackend(retry)
+	backend := &celery.DiscardBackend{}
 
-	// backend := NewAMQPBackend()
-	worker := celery.NewWorker(conf.CelerydConcurrency, sched, celery.NoOpBackend{}, sched)
+	worker := celery.NewWorker(conf.CelerydConcurrency, sched, backend, sched)
 
 	quit := make(chan struct{})
 	sigs := make(chan os.Signal, 1)
@@ -38,8 +40,18 @@ func Serve(queue string, declare func(worker *celery.Worker)) {
 	go func() {
 		s := <-sigs
 		log.Printf("Signal %v received. Closing...", s)
+		go func() {
+			<-time.After(5 * time.Minute)
+			os.Exit(1)
+		}()
+		go func() {
+			<-sigs
+			os.Exit(1)
+		}()
+		worker.Close()
+		worker.Wait()
 		retry.Close()
-		// TODO wait for worker to complete running tasks.
+		log.Println("Closed.")
 		close(quit)
 	}()
 

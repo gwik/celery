@@ -54,9 +54,18 @@ func paniking(ctx context.Context, err string) (string, error) {
 	return "", nil
 }
 
+func slow(ctx context.Context) (interface{}, error) {
+	select {
+	case <-ctx.Done():
+	case <-time.After(20 * time.Second):
+	}
+	return nil, nil
+}
+
 func declare(worker *celery.Worker) {
 	worker.Register("tasks.add", add)
 	worker.Register("tasks.two", two)
+	worker.RegisterFunc("tasks.slow", slow)
 	worker.Register("tasks.tryagain", tryagain)
 	worker.RegisterFunc("tasks.byname", byname)
 	worker.RegisterFunc("tasks.panic", paniking)
