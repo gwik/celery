@@ -12,6 +12,7 @@ import (
 	"math"
 	"reflect"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -100,6 +101,7 @@ type Worker struct {
 	handlerReg map[string]HandleFunc
 	sub        <-chan Task
 	gate       *syncutil.Gate
+	wg         *sync.WaitGroup
 	results    chan *Result
 	quit       chan struct{}
 	backend    Backend
@@ -125,6 +127,7 @@ func NewWorker(concurrency int, sub Subscriber, backend Backend, retry *Schedule
 		handlerReg: make(map[string]HandleFunc),
 		sub:        sub.Subscribe(),
 		gate:       syncutil.NewGate(concurrency),
+		wg:         &sync.WaitGroup{},
 		results:    make(chan *Result),
 		quit:       make(chan struct{}),
 		backend:    backend,
@@ -194,6 +197,10 @@ func (w *Worker) Close() error {
 	return nil
 }
 
+func (w *Worker) Wait() {
+	w.wg.Wait()
+}
+
 func (w *Worker) loop() {
 	go func() {
 		for {
@@ -227,12 +234,12 @@ func (w *Worker) loop() {
 			}
 
 			w.gate.Start()
+			w.wg.Add(1)
 			atomic.AddUint32(&w.running, 1)
 
 			go w.run(task, h)
 
 		case <-w.quit:
-
 			return
 		}
 	}
@@ -241,22 +248,26 @@ func (w *Worker) loop() {
 func (w *Worker) run(task Task, h HandleFunc) {
 	defer atomic.AddUint32(&w.running, ^uint32(0)) // -1
 	defer w.gate.Done()
+	defer w.wg.Done()
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("%s: %s", r, debug.Stack())
 			task.Reject(false)
+			w.backend.Publish(task, &ResultMeta{
+				Status: FAILURE,
+				Result: nil,
+				TaskId: task.Msg().ID,
+			})
 		}
 	}()
 
-	ctx := newCancelProxy(jobContext(task), w.quit)
-	defer ctx.Close()
-
+	ctx := jobContext(task)
 	msg := task.Msg()
 	v, err := h(ctx, msg.Args, msg.KwArgs) // send function return through result
 
 	select {
 	case <-ctx.Done():
-		log.Printf("after, done: %s do nothing.", msg.ID)
+		log.Printf("done: %s do nothing.", msg.ID)
 		return
 	default:
 	}
@@ -273,6 +284,11 @@ func (w *Worker) run(task Task, h HandleFunc) {
 		}
 		log.Printf("job %s/%s failed: %v", msg.Task, msg.ID, err)
 		task.Reject(false)
+		w.backend.Publish(task, &ResultMeta{
+			Status: FAILURE,
+			Result: err.Error(),
+			TaskId: msg.ID,
+		})
 		return
 	}
 
