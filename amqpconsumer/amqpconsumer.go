@@ -26,6 +26,8 @@ type amqpTask struct {
 }
 
 type Config struct {
+	Exchange string
+
 	// queue
 	QDurable    bool
 	QAutoDelete bool
@@ -43,6 +45,8 @@ type Config struct {
 }
 
 var defaultConfig = &Config{
+	Exchange: "celery",
+
 	QDurable:    true,
 	QAutoDelete: false,
 	QExclusive:  false,
@@ -137,6 +141,10 @@ func (c *amqpConsumer) declare(ch *amqp.Channel) (<-chan amqp.Delivery, error) {
 		c.config.QArgs,       // arguments
 	)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := ch.QueueBind(c.q, c.q, c.config.Exchange, false, nil); err != nil {
 		return nil, err
 	}
 
