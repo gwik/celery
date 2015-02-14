@@ -1,6 +1,6 @@
 build:
 	go build -race
-	go build -race main/consume.go
+	go build -race examples/consume.go
 
 deps:
 	go get github.com/streadway/amqp

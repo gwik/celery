@@ -1,3 +1,9 @@
+/*
+Copyright (c) 2015 Antonin Amand <antonin.amand@gmail.com>, All rights reserved.
+See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
+*/
+
+// Package server providers utilities to run celery workers.
 package server
 
 import (
@@ -8,14 +14,14 @@ import (
 	"time"
 
 	"github.com/gwik/celery"
-	// "github.com/gwik/celery/amqpbackend"
+	"github.com/gwik/celery/amqpbackend"
 	"github.com/gwik/celery/amqpconsumer"
 	"github.com/gwik/celery/amqputil"
 
 	_ "github.com/gwik/celery/jsonmessage"
 )
 
-// Serve loads config from environment and runs a worker.
+// Serve loads config from environment and runs a worker with an AMQP consumer and result backend.
 // declare should be used to register tasks.
 func Serve(queue string, declare func(worker *celery.Worker)) {
 	conf := celery.ConfigFromEnv()
@@ -30,8 +36,8 @@ func Serve(queue string, declare func(worker *celery.Worker)) {
 
 	retry := amqputil.NewRetry(conf.BrokerURL, nil, 2*time.Second)
 	sched := celery.NewScheduler(amqpconsumer.NewAMQPSubscriber(queue, nil, retry))
-	// backend := amqpbackend.NewAMQPBackend(retry)
-	backend := &celery.DiscardBackend{}
+	backend := amqpbackend.NewAMQPBackend(retry)
+	// backend := &celery.DiscardBackend{}
 
 	worker := celery.NewWorker(conf.CelerydConcurrency, sched, backend, sched)
 

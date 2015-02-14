@@ -3,6 +3,7 @@ Copyright (c) 2014-2015 Antonin Amand <antonin.amand@gmail.com>, All rights rese
 See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 */
 
+// Package amqpbackend provides an AMQP result backend implementation.
 package amqpbackend
 
 import (
@@ -28,7 +29,8 @@ type amqpBackend struct {
 	encoder func(v interface{}) ([]byte, error) // FIXME: use marshal interface
 }
 
-func NewAMQPBackend(retry *amqputil.Retry) *amqpBackend {
+// NewAMQPBackend builds a new AMQP result backend publisher
+func NewAMQPBackend(retry *amqputil.Retry) celery.Backend {
 	b := &amqpBackend{
 		results: make(chan *result, 100),
 		quit:    make(chan struct{}),
@@ -131,10 +133,12 @@ func (b *amqpBackend) loop() {
 	}
 }
 
+// Publish implements the Backend interface.
 func (b *amqpBackend) Publish(t celery.Task, r *celery.ResultMeta) {
 	b.results <- &result{t, r}
 }
 
+// Close implements the Backend interface.
 func (b *amqpBackend) Close() {
 	close(b.quit)
 }
