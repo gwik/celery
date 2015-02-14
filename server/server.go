@@ -1,4 +1,4 @@
-package builder
+package server
 
 import (
 	"io/ioutil"
@@ -15,6 +15,8 @@ import (
 	_ "github.com/gwik/celery/jsonmessage"
 )
 
+// Serve loads config from environment and runs a worker.
+// declare should be used to register tasks.
 func Serve(queue string, declare func(worker *celery.Worker)) {
 	conf := celery.ConfigFromEnv()
 
@@ -40,10 +42,6 @@ func Serve(queue string, declare func(worker *celery.Worker)) {
 	go func() {
 		s := <-sigs
 		log.Printf("Signal %v received. Closing...", s)
-		go func() {
-			<-time.After(5 * time.Minute)
-			os.Exit(1)
-		}()
 		go func() {
 			<-sigs
 			os.Exit(1)

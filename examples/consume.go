@@ -15,7 +15,7 @@ import (
 	_ "github.com/gwik/celery/jsonmessage"
 
 	"github.com/gwik/celery"
-	"github.com/gwik/celery/builder"
+	"github.com/gwik/celery/server"
 )
 
 func two(context context.Context, args []interface{}, kwargs map[string]interface{}) (interface{}, error) {
@@ -81,7 +81,7 @@ func Consume(queueName string) error {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
 
-	builder.Serve(queueName, declare)
+	server.Serve(queueName, declare)
 
 	return nil
 }
