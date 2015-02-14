@@ -56,6 +56,10 @@ def notify_user(userid, data):
     pass
 
 
+@app.task(ignore_result=True)
+def slow():
+    pass
+
 def notify(userid, data):
     notify(args=[data], queue=user_id, exchange="notifications")
 
@@ -87,8 +91,9 @@ if __name__ == "__main__":
         unknown.delay()
 
     def ex_result():
-        result = add.delay(2, 3)
-        print result.get()
+        for i in xrange(1000):
+            result = add.delay(2, 3)
+            print result.get()
 
     def retry():
         tryagain.delay(0.1, 100)
@@ -101,7 +106,8 @@ if __name__ == "__main__":
 
     # ex_result()
     # ex1()
-    retry()
+    slow.delay()
+    # retry()
     # for i in range(1000):
     #     notify(i)
 
