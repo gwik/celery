@@ -14,7 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package syncutil provides various concurrency mechanisms.
+/*
+Package syncutil provides various concurrency mechanisms.
+
+Copied from camlistore.org project. Copyright 2013 Google Inc.
+*/
 package syncutil
 
 // A Gate limits concurrency.

@@ -3,7 +3,7 @@ Copyright (c) 2015 Antonin Amand <antonin.amand@gmail.com>, All rights reserved.
 See LICENSE file or http://www.opensource.org/licenses/BSD-3-Clause.
 */
 
-// Package server providers utilities to run celery workers.
+// Package server provides utilities to run celery workers.
 package server
 
 import (
