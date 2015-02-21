@@ -28,64 +28,73 @@ func (s *testSubscriber) Close() error {
 	return nil
 }
 
+const (
+	acked    = 1 << iota
+	rejected = 1 << iota
+	requeued = 1 << iota
+)
+
 type testTask struct {
 	context.Context
-	msg    Message
-	ack    func() error
-	reject func(bool) error
+	msg   Message
+	state int
 }
 
-func (t testTask) Ack() error {
-	return t.ack()
+func (t *testTask) Ack() error {
+	t.state |= acked
+	return nil
 }
 
-func (t testTask) Reject(requeue bool) error {
-	return t.reject(requeue)
+func (t *testTask) Reject(requeue bool) error {
+	if requeue {
+		t.state |= requeued
+	}
+	t.state |= rejected
+	return nil
 }
 
-func (t testTask) Msg() Message {
+func (t *testTask) Msg() Message {
 	return t.msg
 }
 
 type testBackend struct {
 	mu        sync.Mutex
-	published map[string]chan Result
+	published map[string]chan *ResultMeta
 }
 
 func newTestBackend() *testBackend {
 	return &testBackend{
 		mu:        sync.Mutex{},
-		published: make(map[string]chan Result),
+		published: make(map[string]chan *ResultMeta),
 	}
 }
 
-func (t *testBackend) resultChan(id string) chan Result {
+func (t *testBackend) resultChan(id string) chan *ResultMeta {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if ch, ok := t.published[id]; ok {
 		return ch
 	}
-	ch := make(chan Result, 1)
+	ch := make(chan *ResultMeta, 1)
 	t.published[id] = ch
 	return ch
 }
 
-func (t *testBackend) Notify(id string) <-chan Result {
+func (t *testBackend) Notify(id string) <-chan *ResultMeta {
 	return t.resultChan(id)
 }
 
 func (t *testBackend) Publish(task Task, r *ResultMeta) {
 	ch := t.resultChan(task.Msg().ID)
-	ch <- r.Result
+	ch <- r
 }
 
-func TaskStub(msg Message) Task {
+func TaskStub(msg Message) *testTask {
 	return &testTask{
 		context.Background(),
 		msg,
-		func() error { return nil },
-		func(bool) error { return nil },
+		0,
 	}
 }
 
@@ -121,17 +130,24 @@ func TestRegisterAndRunTask(t *testing.T) {
 	worker.Start()
 	defer worker.Close()
 
-	sub.Ch <- TaskStub(Message{
+	task := TaskStub(Message{
 		Task:   "job",
 		ID:     "job1",
 		Args:   []interface{}{"foo", 1},
 		KwArgs: map[string]interface{}{"one": 1, "two": nil},
 	})
+	sub.Ch <- task
 
 	select {
 	case res := <-results.Notify("job1"):
-		if res.(string) != "result" {
+		if res.Status != SUCCESS {
+			t.Fatalf("expected success was %v", res.Status)
+		}
+		if res.Result.(string) != "result" {
 			t.Fatalf("expected result to be `result`")
+		}
+		if task.state&acked == 0 {
+			t.Fatalf("task should be acked")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout.")
@@ -151,20 +167,27 @@ func TestRegisterFuncAndRunTask(t *testing.T) {
 	worker.Start()
 	defer worker.Close()
 
-	sub.Ch <- TaskStub(Message{
+	task := TaskStub(Message{
 		Task: "job",
 		ID:   "job1",
 		Args: []interface{}{float64(2.86), []string{"a", "b", "c"}},
 	})
+	sub.Ch <- task
 
 	select {
 	case r := <-results.Notify("job1"):
-		res := r.([]interface{})
+		if r.Status != SUCCESS {
+			t.Fatalf("expected SUCCESS was %v", r.Status)
+		}
+		res := r.Result.([]interface{})
 		if v, ok := res[0].(float64); !ok || v != 2.86 {
 			t.Errorf("expected result[0] to be 2.86 float64 was: %v", res)
 		}
 		if _, ok := res[1].([]string); !ok {
 			t.Fatalf("expected result[1] to be a list of strings")
+		}
+		if task.state&acked == 0 {
+			t.Fatal("task should be acked")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout.")
@@ -192,19 +215,58 @@ func TestRetryTask(t *testing.T) {
 	worker.Start()
 	defer worker.Close()
 
-	sub.Ch <- TaskStub(Message{
+	task := TaskStub(Message{
 		Task: "job",
 		ID:   "job1",
-		Args: []interface{}{},
 	})
+	sub.Ch <- task
 
 	select {
 	case res := <-results.Notify("job1"):
-		if res.(uint32) != count && count != 2 {
-			t.Errorf("expected retries to be 2 was: %d", res.(uint32))
+		if res.Status != SUCCESS {
+			t.Fatalf("expected SUCCESS was %v", res.Status)
+		}
+		if res.Result.(uint32) != count && count != 2 {
+			t.Errorf("expected retries to be 2 was: %v", res.Result)
+		}
+		if task.state&acked == 0 {
+			t.Fatal("task should be acked")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout.")
 	}
 
+}
+
+func TestPanikingTask(t *testing.T) {
+	sub := newTestSubscriber()
+	results := newTestBackend()
+	sched := NewScheduler(sub)
+	worker := NewWorker(1, sched, results, sched)
+
+	worker.RegisterFunc("job", func(ctx context.Context) (string, error) {
+		panic("task panics")
+		return "", nil
+	})
+
+	worker.Start()
+	defer worker.Close()
+
+	task := TaskStub(Message{
+		Task: "job",
+		ID:   "job1",
+	})
+	sub.Ch <- task
+
+	select {
+	case res := <-results.Notify("job1"):
+		if res.Status != FAILURE {
+			t.Fatalf("expected failure was %v", res.Status)
+		}
+		if task.state&acked == 0 {
+			t.Fatal("task should be acked")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout.")
+	}
 }
